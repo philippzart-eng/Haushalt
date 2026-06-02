@@ -1,0 +1,1865 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Haushalt" />
+<meta name="theme-color" content="#FAF7F2" />
+<title>Unser Haushalt</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: #FAF7F2; font-family: 'Inter', -apple-system, system-ui, sans-serif; overscroll-behavior: none; }
+  body { padding: env(safe-area-inset-top) 0 0 0; }
+  input, textarea, select, button { font-family: 'Inter', sans-serif; }
+  input:focus, textarea:focus, select:focus { outline: 1.5px solid #B8543240; outline-offset: 1px; }
+  button { cursor: pointer; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-thumb { background: #D9CFBC; border-radius: 3px; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+  @keyframes toastIn { from { opacity: 0; transform: translate(-50%, 20px); } to { opacity: 1; transform: translate(-50%, 0); } }
+  .fadeIn { animation: fadeIn 0.35s ease-out; }
+  .slideUp { animation: slideUp 0.3s ease-out; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.3.1",
+    "react-dom/client": "https://esm.sh/react-dom@18.3.1/client",
+    "recharts": "https://esm.sh/recharts@2.15.0?deps=react@18.3.1",
+    "firebase/app": "https://esm.sh/firebase@10.14.1/app",
+    "firebase/firestore": "https://esm.sh/firebase@10.14.1/firestore"
+  }
+}
+</script>
+
+<script type="module">
+// ============================================================
+// FIREBASE_CONFIG_HIER — durch deine Config ersetzen!
+// ============================================================
+const firebaseConfig = {
+  apiKey: "AIzaSyDrjHW_C5C_njasZA1ia4GfgnNLDxnIeX4",
+  authDomain: "haushalt-cbeb3.firebaseapp.com",
+  databaseURL: "https://haushalt-cbeb3-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "haushalt-cbeb3",
+  storageBucket: "haushalt-cbeb3.firebasestorage.app",
+  messagingSenderId: "584478645116",
+  appId: "1:584478645116:web:51809543b1fd44ecb6e2f9"
+};
+
+// PIN-Code: 4-6 Stellen, beide brauchen denselben
+const PIN = "1234";
+
+// Haushalts-ID: eindeutig für eure App-Instanz. So könntet ihr theoretisch
+// mehrere Haushalte in einer Firebase nutzen.
+const HOUSEHOLD_ID = "haushalt-1";
+
+// ============================================================
+// IMPORTS
+// ============================================================
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { createRoot } from "react-dom/client";
+import {
+  PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar,
+  XAxis, YAxis, Tooltip, AreaChart, Area, CartesianGrid
+} from "recharts";
+import { initializeApp } from "firebase/app";
+import {
+  getFirestore, doc, setDoc, onSnapshot, collection,
+  query, orderBy
+} from "firebase/firestore";
+
+const h = React.createElement;
+
+// ============================================================
+// FIREBASE INIT
+// ============================================================
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+
+// Firestore wird so strukturiert:
+// households/{HOUSEHOLD_ID}/data/{docKey}  → ein Dokument pro Datentyp
+// Alle Daten in einem Dokument als Array — einfach und schnell für kleine Haushalte.
+const dataDoc = (key) => doc(db, "households", HOUSEHOLD_ID, "data", key);
+
+const cloudGet = (key, fallback, onUpdate) => {
+  return onSnapshot(dataDoc(key), (snap) => {
+    if (snap.exists()) onUpdate(snap.data().value ?? fallback);
+    else onUpdate(fallback);
+  }, (err) => {
+    console.error("Firestore error", key, err);
+  });
+};
+
+const cloudSet = async (key, value) => {
+  try {
+    await setDoc(dataDoc(key), { value, updatedAt: Date.now() });
+  } catch (e) {
+    console.error("cloudSet error", key, e);
+  }
+};
+
+// ============================================================
+// DESIGN TOKENS
+// ============================================================
+const c = {
+  bg: "#FAF7F2", surface: "#FFFFFF", surfaceAlt: "#F4EFE7",
+  ink: "#1A1D1B", inkSoft: "#5F6661", inkFaint: "#9DA39E",
+  accent: "#B85432", accentSoft: "#F3DDD0",
+  forest: "#2A3E32", forestSoft: "#E1E8E0",
+  ochre: "#C19A4B", rose: "#D89A8A",
+  border: "#EDE6D6", borderStrong: "#D9CFBC",
+  warn: "#B85432", success: "#5B7F60",
+  warnBg: "#FBEEE7", successBg: "#EAF1EB",
+};
+
+const CATEGORY_DEFAULTS = [
+  { name: "Lebensmittel", color: "#B85432", icon: "🥬" },
+  { name: "Miete", color: "#2A3E32", icon: "🏠" },
+  { name: "Strom & Gas", color: "#C19A4B", icon: "⚡" },
+  { name: "Internet & Handy", color: "#7BA098", icon: "📶" },
+  { name: "Haushalt", color: "#D89A8A", icon: "🧺" },
+  { name: "Restaurant", color: "#A0522D", icon: "🍽️" },
+  { name: "Freizeit", color: "#6B8E7F", icon: "🎭" },
+  { name: "Drogerie", color: "#B0826B", icon: "🧴" },
+  { name: "Transport", color: "#8B7355", icon: "🚆" },
+  { name: "Abos", color: "#9B8AA0", icon: "📺" },
+  { name: "Sonstiges", color: "#8B7D6B", icon: "•" },
+];
+
+// ============================================================
+// UTILITIES
+// ============================================================
+const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+const fmtEUR = (n) => new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR" }).format(n || 0);
+const fmtEURc = (n) => {
+  if (Math.abs(n) >= 1000) return new Intl.NumberFormat("de-DE", { style: "currency", currency: "EUR", maximumFractionDigits: 0 }).format(n);
+  return fmtEUR(n);
+};
+const fmtDate = (iso, opts = { day: "2-digit", month: "short" }) => {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("de-DE", opts);
+};
+const fmtDateLong = (iso) => fmtDate(iso, { weekday: "long", day: "numeric", month: "long" });
+const today = () => new Date().toISOString().slice(0, 10);
+const mKey = (iso) => iso.slice(0, 7);
+const daysBetween = (a, b) => Math.floor((new Date(b) - new Date(a)) / 86400000);
+const monthName = (key) => {
+  const [y, m] = key.split("-");
+  return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+};
+const monthShort = (key) => {
+  const [y, m] = key.split("-");
+  return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString("de-DE", { month: "short" });
+};
+const getCat = (cats, name) => cats.find((x) => x.name === name) || { name, color: c.inkFaint, icon: "•" };
+
+// ============================================================
+// ICONS (Inline SVG, statt lucide-react)
+// ============================================================
+const I = {
+  Home: (p) => svgIcon("M3 12L12 3l9 9M5 10v10a1 1 0 001 1h12a1 1 0 001-1V10", p),
+  Receipt: (p) => svgIcon("M16 2H8a2 2 0 00-2 2v18l3-2 3 2 3-2 3 2V4a2 2 0 00-2-2z M9 7h6 M9 11h6 M9 15h4", p),
+  ListChecks: (p) => svgIcon("M3 6l2 2 4-4 M3 14l2 2 4-4 M11 6h10 M11 14h10 M11 18h7", p),
+  ShoppingBasket: (p) => svgIcon("M3 9l3-6 M21 9l-3-6 M2 9h20l-2 11a2 2 0 01-2 2H6a2 2 0 01-2-2L2 9z M9 13v4 M15 13v4", p),
+  BarChart: (p) => svgIcon("M3 21V10 M9 21V4 M15 21v-7 M21 21v-3", p),
+  Settings: (p) => svgIcon("M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z", p),
+  Plus: (p) => svgIcon("M12 5v14 M5 12h14", p),
+  Check: (p) => svgIcon("M20 6L9 17l-5-5", p),
+  Trash: (p) => svgIcon("M3 6h18 M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6 M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2", p),
+  Repeat: (p) => svgIcon("M17 1l4 4-4 4 M3 11V9a4 4 0 014-4h14 M7 23l-4-4 4-4 M21 13v2a4 4 0 01-4 4H3", p),
+  Alert: (p) => svgIcon("M12 9v4 M12 17h.01 M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z", p),
+  Users: (p) => svgIcon("M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2 M9 11a4 4 0 100-8 4 4 0 000 8z M23 21v-2a4 4 0 00-3-3.87 M16 3.13a4 4 0 010 7.75", p),
+  Edit: (p) => svgIcon("M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7 M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z", p),
+  X: (p) => svgIcon("M18 6L6 18 M6 6l12 12", p),
+  Arrow: (p) => svgIcon("M5 12h14 M12 5l7 7-7 7", p),
+  ChevDown: (p) => svgIcon("M6 9l6 6 6-6", p),
+  ChevRight: (p) => svgIcon("M9 18l6-6-6-6", p),
+  Search: (p) => svgIcon("M21 21l-4.35-4.35 M16.5 10.5a6 6 0 11-12 0 6 6 0 0112 0z", p),
+  Filter: (p) => svgIcon("M22 3H2l8 9.46V19l4 2v-8.54L22 3z", p),
+  Rotate: (p) => svgIcon("M23 4v6h-6 M1 20v-6h6 M3.51 9a9 9 0 0114.85-3.36L23 10 M1 14l4.64 4.36A9 9 0 0020.49 15", p),
+  Flame: (p) => svgIcon("M8.5 14.5A2.5 2.5 0 0011 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 11-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 002.5 2.5z", p),
+  Star: (p) => svgIcon("M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z", p),
+  Lock: (p) => svgIcon("M19 11H5a2 2 0 00-2 2v7a2 2 0 002 2h14a2 2 0 002-2v-7a2 2 0 00-2-2z M7 11V7a5 5 0 0110 0v4", p),
+  Cloud: (p) => svgIcon("M18 10h-1.26A8 8 0 109 20h9a5 5 0 000-10z", p),
+};
+
+function svgIcon(d, { size = 16, color = "currentColor", strokeWidth = 1.6 } = {}) {
+  return h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth, strokeLinecap: "round", strokeLinejoin: "round" },
+    d.split(" M").map((path, i) => h("path", { key: i, d: i === 0 ? path : "M" + path }))
+  );
+}
+
+// ============================================================
+// MAIN APP
+// ============================================================
+function App() {
+  const [authed, setAuthed] = useState(() => sessionStorage.getItem("hh_authed") === "1");
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(() => localStorage.getItem("hh_user") || null);
+  const [tab, setTab] = useState("home");
+
+  // State
+  const [users, setUsers] = useState(["Bob", "Anna"]);
+  const [expenses, setExpenses] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [shopping, setShopping] = useState([]);
+  const [categories, setCategories] = useState(CATEGORY_DEFAULTS);
+  const [budgets, setBudgets] = useState({});
+  const [recurring, setRecurring] = useState([]);
+  const [settlements, setSettlements] = useState([]);
+
+  const [toast, setToast] = useState(null);
+  const showToast = (msg, kind = "info") => {
+    setToast({ msg, kind, id: uid() });
+    setTimeout(() => setToast(null), 2200);
+  };
+
+  // Firestore live-listeners
+  useEffect(() => {
+    if (!authed) return;
+    const unsubs = [
+      cloudGet("users", ["Bob", "Anna"], setUsers),
+      cloudGet("expenses", [], (v) => setExpenses(migrateExpenses(v))),
+      cloudGet("tasks", [], (v) => setTasks(migrateTasks(v))),
+      cloudGet("shopping", [], setShopping),
+      cloudGet("categories", CATEGORY_DEFAULTS, setCategories),
+      cloudGet("budgets", {}, setBudgets),
+      cloudGet("recurring", [], setRecurring),
+      cloudGet("settlements", [], setSettlements),
+    ];
+    setLoading(false);
+    return () => unsubs.forEach((u) => u && u());
+  }, [authed]);
+
+  // Recurring tasks/expenses ausführen (einmal beim Start)
+  const ranRecurringRef = useRef(false);
+  useEffect(() => {
+    if (loading || ranRecurringRef.current || !authed) return;
+    if (recurring.length === 0 && tasks.length === 0) return;
+    ranRecurringRef.current = true;
+    runRecurring(recurring, expenses).then((added) => {
+      if (added.length > 0) {
+        const updated = [...expenses, ...added];
+        cloudSet("expenses", updated);
+        // recurring lastGenerated updaten
+        const updatedRec = recurring.map((r) => {
+          if (!r.active) return r;
+          const mine = added.filter((n) => n.recurringSource === r.id);
+          if (mine.length === 0) return r;
+          return { ...r, lastGenerated: mine[mine.length - 1].date };
+        });
+        cloudSet("recurring", updatedRec);
+      }
+    });
+    rotateRecurringTasks(tasks, users).then((changed) => {
+      if (changed) cloudSet("tasks", changed);
+    });
+  }, [loading, authed, recurring, tasks, users, expenses]);
+
+  const p = {
+    expenses: (n) => cloudSet("expenses", n),
+    tasks: (n) => cloudSet("tasks", n),
+    shopping: (n) => cloudSet("shopping", n),
+    categories: (n) => cloudSet("categories", n),
+    budgets: (n) => cloudSet("budgets", n),
+    recurring: (n) => cloudSet("recurring", n),
+    settlements: (n) => cloudSet("settlements", n),
+    users: (n) => cloudSet("users", n),
+  };
+
+  const pickUser = (name) => {
+    setCurrentUser(name);
+    if (name) localStorage.setItem("hh_user", name);
+    else localStorage.removeItem("hh_user");
+  };
+
+  // PIN-Screen
+  if (!authed) {
+    return h(PinScreen, { onSuccess: () => { sessionStorage.setItem("hh_authed", "1"); setAuthed(true); } });
+  }
+
+  if (loading) {
+    return h("div", { style: { ...st.app, alignItems: "center", justifyContent: "center" } },
+      h("div", { style: { textAlign: "center" } },
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 36, color: c.forest, fontWeight: 500, letterSpacing: -0.5, fontStyle: "italic" } }, "Haushalt"),
+        h("div", { style: { marginTop: 6, fontSize: 12, color: c.inkSoft, letterSpacing: 2, textTransform: "uppercase" } }, "Verbindet…")
+      )
+    );
+  }
+
+  if (!currentUser) {
+    return h(Login, { users, setUsers: p.users, onPick: pickUser });
+  }
+
+  const ctx = {
+    currentUser, users, expenses, tasks, shopping, categories, budgets, recurring, settlements,
+    p, showToast, setTab,
+  };
+
+  return h("div", { style: st.app },
+    h(Header, { currentUser, onSwitch: () => pickUser(null), setTab, onLogout: () => { sessionStorage.removeItem("hh_authed"); setAuthed(false); } }),
+    h("div", { style: st.content },
+      tab === "home" && h(Dashboard, { ctx }),
+      tab === "expenses" && h(Expenses, { ctx }),
+      tab === "tasks" && h(Tasks, { ctx }),
+      tab === "shopping" && h(Shopping, { ctx }),
+      tab === "stats" && h(Stats, { ctx }),
+      tab === "settings" && h(SettingsView, { ctx })
+    ),
+    h(BottomNav, { tab, setTab }),
+    toast && h(Toast, toast)
+  );
+}
+
+// ============================================================
+// PIN SCREEN
+// ============================================================
+function PinScreen({ onSuccess }) {
+  const [pin, setPin] = useState("");
+  const [error, setError] = useState(false);
+
+  const submit = (val) => {
+    if (val === PIN) {
+      setError(false);
+      onSuccess();
+    } else {
+      setError(true);
+      setTimeout(() => { setPin(""); setError(false); }, 800);
+    }
+  };
+
+  const handleDigit = (d) => {
+    if (pin.length >= 6) return;
+    const next = pin + d;
+    setPin(next);
+    if (next.length === PIN.length) submit(next);
+  };
+
+  return h("div", { style: { ...st.app, alignItems: "center", justifyContent: "center", padding: 28 }, className: "fadeIn" },
+    h("div", { style: { width: "100%", maxWidth: 320, textAlign: "center" } },
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 14, color: c.inkSoft, letterSpacing: 4, textTransform: "uppercase", marginBottom: 12 } }, "Willkommen"),
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 48, fontWeight: 500, color: c.ink, letterSpacing: -1.2, lineHeight: 0.95, fontStyle: "italic" } }, "Haushalt"),
+      h("div", { style: { marginTop: 32, marginBottom: 24, display: "flex", justifyContent: "center", gap: 12 } },
+        Array.from({ length: PIN.length }).map((_, i) =>
+          h("div", { key: i, style: {
+            width: 14, height: 14, borderRadius: "50%",
+            background: pin.length > i ? (error ? c.warn : c.ink) : "transparent",
+            border: `1.5px solid ${error ? c.warn : pin.length > i ? c.ink : c.borderStrong}`,
+            transition: "all 0.15s"
+          }})
+        )
+      ),
+      h("div", { style: { fontSize: 12, color: error ? c.warn : c.inkSoft, marginBottom: 24, minHeight: 16 } },
+        error ? "Falscher PIN" : "PIN eingeben"
+      ),
+      h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, maxWidth: 280, margin: "0 auto" } },
+        [1, 2, 3, 4, 5, 6, 7, 8, 9].map((d) =>
+          h("button", { key: d, onClick: () => handleDigit(String(d)), style: st.pinBtn }, d)
+        ),
+        h("div"),
+        h("button", { onClick: () => handleDigit("0"), style: st.pinBtn }, "0"),
+        h("button", { onClick: () => setPin(pin.slice(0, -1)), style: { ...st.pinBtn, fontSize: 18 } }, "←")
+      )
+    )
+  );
+}
+
+// ============================================================
+// MIGRATION
+// ============================================================
+function migrateExpenses(list) {
+  return (list || []).map((e) => ({ splitType: "equal", splitRatio: null, notes: "", ...e }));
+}
+function migrateTasks(list) {
+  return (list || []).map((t) => ({ history: [], priority: "normal", rotate: false, rotationIndex: 0, ...t }));
+}
+
+// ============================================================
+// LOGIC: Recurring Expenses
+// ============================================================
+async function runRecurring(recurringList, currentExpenses) {
+  const newOnes = [];
+  const now = new Date();
+  recurringList.forEach((r) => {
+    if (!r.active) return;
+    let cursor = r.lastGenerated ? new Date(r.lastGenerated) : new Date(r.startDate);
+    while (true) {
+      const next = new Date(cursor);
+      if (r.frequency === "monthly") next.setMonth(next.getMonth() + 1);
+      else if (r.frequency === "weekly") next.setDate(next.getDate() + 7);
+      else break;
+      if (next > now) break;
+      newOnes.push({
+        id: uid(),
+        amount: r.amount,
+        category: r.category,
+        description: r.description,
+        date: next.toISOString().slice(0, 10),
+        paidBy: r.paidBy,
+        scope: r.scope || "shared",
+        splitType: r.splitType || "equal",
+        splitRatio: r.splitRatio || null,
+        notes: "Automatisch erzeugt",
+        recurringSource: r.id,
+      });
+      cursor = next;
+    }
+  });
+  return newOnes;
+}
+
+async function rotateRecurringTasks(tasks, users) {
+  let changed = false;
+  const next = tasks.map((t) => {
+    if (!t.recurring || !t.completed || !t.lastCompleted) return t;
+    const d = daysBetween(t.lastCompleted, today());
+    const reset =
+      (t.recurring === "daily" && d >= 1) ||
+      (t.recurring === "weekly" && d >= 7) ||
+      (t.recurring === "monthly" && d >= 30) ||
+      (t.recurring === "biweekly" && d >= 14);
+    if (!reset) return t;
+    changed = true;
+    const updated = { ...t, completed: false };
+    if (t.rotate && users.length >= 2) {
+      const currentIdx = users.indexOf(t.assignedTo);
+      const nextIdx = (currentIdx + 1) % users.length;
+      updated.assignedTo = users[nextIdx];
+      updated.rotationIndex = (t.rotationIndex || 0) + 1;
+    }
+    return updated;
+  });
+  return changed ? next : null;
+}
+
+// ============================================================
+// LOGIC: Balance
+// ============================================================
+function computeBalance(expenses, settlements, currentUser, other) {
+  let amount = 0;
+  expenses.filter((e) => e.scope === "shared").forEach((e) => {
+    const shares = getSplit(e, currentUser, other);
+    if (e.paidBy === currentUser) amount += shares.other;
+    else if (e.paidBy === other) amount -= shares.current;
+  });
+  settlements.forEach((s) => {
+    if (s.from === other && s.to === currentUser) amount -= s.amount;
+    else if (s.from === currentUser && s.to === other) amount += s.amount;
+  });
+  return { amount };
+}
+
+function getSplit(expense, currentUser, other) {
+  if (expense.splitType === "full_payer") return { current: 0, other: 0 };
+  if (expense.splitType === "custom" && expense.splitRatio) {
+    const r = expense.splitRatio;
+    return {
+      current: (expense.amount * (r[currentUser] || 0)) / 100,
+      other: (expense.amount * (r[other] || 0)) / 100,
+    };
+  }
+  return { current: expense.amount / 2, other: expense.amount / 2 };
+}
+
+// ============================================================
+// LOGIN
+// ============================================================
+function Login({ users, setUsers, onPick }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(users);
+
+  return h("div", { style: { ...st.app, alignItems: "center", justifyContent: "center", padding: 28 } },
+    h("div", { style: { width: "100%", maxWidth: 380 }, className: "fadeIn" },
+      h("div", { style: { textAlign: "center", marginBottom: 52 } },
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 14, color: c.inkSoft, letterSpacing: 4, textTransform: "uppercase", marginBottom: 12 } }, "Willkommen"),
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 56, fontWeight: 500, color: c.ink, letterSpacing: -1.5, lineHeight: 0.95 } }, "Unser"),
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 56, fontWeight: 500, color: c.accent, fontStyle: "italic", letterSpacing: -1.5, lineHeight: 0.95 } }, "Haushalt"),
+        h("div", { style: { marginTop: 28, fontSize: 13, color: c.inkSoft } }, "Wer bist du?")
+      ),
+      !editing
+        ? h("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+            users.map((u) =>
+              h("button", { key: u, onClick: () => onPick(u), style: st.userPick },
+                h("div", { style: { display: "flex", alignItems: "center", gap: 14 } },
+                  h("div", { style: st.avatar }, u.charAt(0)),
+                  h("span", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 24, fontWeight: 500, color: c.ink } }, u)
+                ),
+                I.Arrow({ size: 18, color: c.accent })
+              )
+            ),
+            h("button", { onClick: () => setEditing(true), style: { ...st.textBtn, marginTop: 12, alignSelf: "center" } }, "Namen ändern")
+          )
+        : h("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+            draft.map((name, i) =>
+              h("input", { key: i, value: name, onChange: (e) => { const x = [...draft]; x[i] = e.target.value; setDraft(x); }, style: st.input, placeholder: `Person ${i + 1}` })
+            ),
+            h("button", { onClick: async () => {
+              const cl = draft.map((d) => d.trim()).filter(Boolean);
+              if (cl.length === 2) { await setUsers(cl); setEditing(false); }
+            }, style: { ...st.primaryBtn, marginTop: 6 } }, "Speichern")
+          )
+    )
+  );
+}
+
+// ============================================================
+// HEADER
+// ============================================================
+function Header({ currentUser, onSwitch, setTab, onLogout }) {
+  return h("div", { style: st.header },
+    h("div", { style: { display: "flex", alignItems: "center", gap: 12 } },
+      h("div", { style: { ...st.avatar, width: 34, height: 34, fontSize: 14, background: c.forest, color: c.surface } }, currentUser.charAt(0)),
+      h("div", null,
+        h("div", { style: st.eyebrow }, "Angemeldet"),
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: c.ink, marginTop: -1 } }, currentUser)
+      )
+    ),
+    h("div", { style: { display: "flex", gap: 6 } },
+      h("button", { onClick: () => setTab("settings"), style: st.iconBtn, "aria-label": "Einstellungen" }, I.Settings({ color: c.inkSoft })),
+      h("button", { onClick: onSwitch, style: st.iconBtn, "aria-label": "Wechseln" }, I.Users({ color: c.inkSoft })),
+      h("button", { onClick: onLogout, style: st.iconBtn, "aria-label": "Sperren" }, I.Lock({ color: c.inkSoft }))
+    )
+  );
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+function Dashboard({ ctx }) {
+  const { currentUser, users, expenses, tasks, shopping, budgets, settlements, p, setTab, showToast } = ctx;
+  const other = users.find((u) => u !== currentUser);
+  const balance = useMemo(() => computeBalance(expenses, settlements, currentUser, other), [expenses, settlements, currentUser, other]);
+
+  const myTasks = tasks.filter((t) => !t.completed && (t.assignedTo === currentUser || t.assignedTo === "Beide"));
+  const overdueTasks = myTasks.filter((t) => t.dueDate && t.dueDate < today());
+  const todayTasks = myTasks.filter((t) => t.dueDate === today());
+  const shopOpen = shopping.filter((s) => !s.bought).length;
+  const shopUrgent = shopping.filter((s) => !s.bought && s.urgent).length;
+
+  const month = today().slice(0, 7);
+  const monthSpend = expenses.filter((e) => e.scope === "shared" && e.date.startsWith(month)).reduce((s, e) => s + e.amount, 0);
+  const totalBudget = Object.values(budgets).reduce((s, v) => s + (v || 0), 0);
+  const budgetPct = totalBudget > 0 ? (monthSpend / totalBudget) * 100 : 0;
+
+  const streak = useMemo(() => {
+    const dates = new Set();
+    tasks.forEach((t) => t.history?.forEach((h) => dates.add(h.date)));
+    let count = 0;
+    let d = new Date();
+    while (dates.has(d.toISOString().slice(0, 10))) { count++; d.setDate(d.getDate() - 1); }
+    return count;
+  }, [tasks]);
+
+  const [showSettle, setShowSettle] = useState(false);
+
+  const quickComplete = async (id) => {
+    const next = tasks.map((t) => {
+      if (t.id !== id) return t;
+      const history = [...(t.history || []), { date: today(), by: currentUser }];
+      return { ...t, completed: true, lastCompleted: today(), history };
+    });
+    await p.tasks(next);
+    showToast("Erledigt", "success");
+  };
+
+  return h("div", { style: { display: "flex", flexDirection: "column", gap: 22, paddingBottom: 24 }, className: "fadeIn" },
+    h("div", null,
+      h("div", { style: st.eyebrow }, fmtDateLong(today())),
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 34, fontWeight: 500, color: c.ink, letterSpacing: -0.8, marginTop: 4, lineHeight: 1.05 } },
+        "Hallo, ", h("span", { style: { fontStyle: "italic" } }, currentUser)
+      )
+    ),
+
+    // Balance card
+    h("div", { style: { ...st.cardLg, background: c.forest, color: c.surface, position: "relative", overflow: "hidden" } },
+      h("div", { style: { position: "absolute", top: -50, right: -50, width: 180, height: 180, borderRadius: "50%", background: "rgba(255,255,255,0.04)" } }),
+      h("div", { style: { position: "relative" } },
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start" } },
+          h("div", { style: { ...st.eyebrow, color: "rgba(255,255,255,0.55)" } }, "Schuldenausgleich"),
+          Math.abs(balance.amount) >= 0.01 && h("button", { onClick: () => setShowSettle(true), style: st.pillBtn }, "Ausgleichen")
+        ),
+        h("div", { style: { marginTop: 16 } },
+          Math.abs(balance.amount) < 0.01
+            ? h(React.Fragment, null,
+                h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 30, fontWeight: 500, fontStyle: "italic" } }, "Alles ausgeglichen"),
+                h("div", { style: { fontSize: 12, opacity: 0.55, marginTop: 6 } }, "Keine offenen Beträge")
+              )
+            : balance.amount > 0
+              ? h(React.Fragment, null,
+                  h("div", { style: { fontSize: 13, opacity: 0.7 } }, `${other} schuldet dir`),
+                  h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 42, fontWeight: 500, marginTop: 4, letterSpacing: -1, color: c.rose } }, fmtEUR(balance.amount))
+                )
+              : h(React.Fragment, null,
+                  h("div", { style: { fontSize: 13, opacity: 0.7 } }, `Du schuldest ${other}`),
+                  h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 42, fontWeight: 500, marginTop: 4, letterSpacing: -1, color: c.ochre } }, fmtEUR(Math.abs(balance.amount)))
+                )
+        )
+      )
+    ),
+
+    // Budget
+    totalBudget > 0 && h("div", { style: st.card },
+      h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 } },
+        h("div", null,
+          h("div", { style: st.eyebrow }, `Monatsbudget · ${monthShort(month)}`),
+          h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 24, fontWeight: 500, color: c.ink, marginTop: 4, letterSpacing: -0.5 } },
+            fmtEUR(monthSpend),
+            h("span", { style: { fontSize: 14, color: c.inkSoft, fontWeight: 400, fontFamily: "Inter, sans-serif", marginLeft: 4 } }, ` / ${fmtEURc(totalBudget)}`)
+          )
+        ),
+        h("div", { style: { fontSize: 12, color: budgetPct > 100 ? c.warn : budgetPct > 80 ? c.ochre : c.success, fontWeight: 500 } }, `${Math.round(budgetPct)}%`)
+      ),
+      h("div", { style: st.progressTrack },
+        h("div", { style: { ...st.progressFill, width: `${Math.min(100, budgetPct)}%`, background: budgetPct > 100 ? c.warn : budgetPct > 80 ? c.ochre : c.success } })
+      )
+    ),
+
+    // Quick stats
+    h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
+      h(MiniStat, { label: "Offene Aufgaben", value: myTasks.length, subValue: overdueTasks.length > 0 ? `${overdueTasks.length} überfällig` : null, accent: overdueTasks.length > 0 ? c.warn : null, onClick: () => setTab("tasks") }),
+      h(MiniStat, { label: "Einkaufsliste", value: shopOpen, subValue: shopUrgent > 0 ? `${shopUrgent} dringend` : null, accent: shopUrgent > 0 ? c.warn : null, onClick: () => setTab("shopping") })
+    ),
+
+    streak >= 3 && h("div", { style: { ...st.card, display: "flex", alignItems: "center", gap: 14, padding: "14px 18px" } },
+      I.Flame({ size: 22, color: c.ochre }),
+      h("div", { style: { flex: 1 } },
+        h("div", { style: { fontSize: 17, fontWeight: 500, color: c.ink, fontFamily: "'Cormorant Garamond', serif", fontStyle: "italic" } }, `${streak} Tage Serie`),
+        h("div", { style: { fontSize: 12, color: c.inkSoft, marginTop: 1 } }, "Jeden Tag mind. eine Aufgabe erledigt")
+      )
+    ),
+
+    (todayTasks.length > 0 || overdueTasks.length > 0) && h(Section, { title: overdueTasks.length > 0 ? "Heute & überfällig" : "Heute fällig" },
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+        [...overdueTasks, ...todayTasks].slice(0, 4).map((t) => {
+          const overdue = t.dueDate < today();
+          return h("div", { key: t.id, style: { ...st.row, padding: "12px 14px", borderColor: overdue ? c.warn + "40" : c.border } },
+            h("button", { onClick: () => quickComplete(t.id), style: st.checkbox, "aria-label": "Schnell erledigen" }),
+            h("div", { style: { flex: 1, marginLeft: 10, minWidth: 0 } },
+              h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, t.title),
+              h("div", { style: { fontSize: 11.5, color: overdue ? c.warn : c.inkSoft, marginTop: 2, display: "flex", alignItems: "center", gap: 6 } },
+                t.recurring && I.Repeat({ size: 10 }),
+                `${t.assignedTo} ${overdue ? `· überfällig seit ${fmtDate(t.dueDate)}` : "· heute"}`
+              )
+            ),
+            t.priority === "high" && I.Star({ size: 13, color: c.accent })
+          );
+        })
+      )
+    ),
+
+    h(Section, { title: "Aufgaben", action: () => setTab("tasks") },
+      myTasks.length === 0
+        ? h(Empty, { text: "Alles erledigt — schön! 🌿" })
+        : h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+            myTasks.filter((t) => t.dueDate !== today() && (!t.dueDate || t.dueDate > today())).slice(0, 3).map((t) =>
+              h("div", { key: t.id, style: { ...st.row, padding: "12px 14px" } },
+                h("button", { onClick: () => quickComplete(t.id), style: st.checkbox, "aria-label": "Erledigen" }),
+                h("div", { style: { flex: 1, marginLeft: 10, minWidth: 0 } },
+                  h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, t.title),
+                  h("div", { style: { fontSize: 11.5, color: c.inkSoft, marginTop: 2, display: "flex", alignItems: "center", gap: 6 } },
+                    t.recurring && I.Repeat({ size: 10 }),
+                    t.rotate && I.Rotate({ size: 10 }),
+                    `${t.assignedTo}${t.dueDate ? ` · bis ${fmtDate(t.dueDate)}` : ""}`
+                  )
+                ),
+                t.priority === "high" && I.Star({ size: 13, color: c.accent })
+              )
+            )
+          )
+    ),
+
+    showSettle && h(SettlementModal, {
+      balance: balance.amount,
+      currentUser,
+      other,
+      onClose: () => setShowSettle(false),
+      onConfirm: async (amount) => {
+        const from = balance.amount > 0 ? other : currentUser;
+        const to = balance.amount > 0 ? currentUser : other;
+        await p.settlements([...settlements, { id: uid(), date: today(), from, to, amount: Math.abs(amount), recordedBy: currentUser }]);
+        setShowSettle(false);
+        showToast(`Ausgleich über ${fmtEUR(amount)} verbucht`, "success");
+      }
+    })
+  );
+}
+
+function SettlementModal({ balance, currentUser, other, onClose, onConfirm }) {
+  const [amount, setAmount] = useState(Math.abs(balance).toFixed(2));
+  const from = balance > 0 ? other : currentUser;
+  const to = balance > 0 ? currentUser : other;
+  return h(Modal, { onClose, title: "Ausgleich verbuchen" },
+    h("div", { style: { ...st.card, padding: 18, background: c.surfaceAlt, border: "none" } },
+      h("div", { style: { fontSize: 12, color: c.inkSoft, marginBottom: 8 } },
+        h("strong", { style: { color: c.ink, fontWeight: 500 } }, from),
+        " zahlt ",
+        h("strong", { style: { color: c.ink, fontWeight: 500 } }, to)
+      ),
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 32, fontWeight: 500, color: c.accent, letterSpacing: -0.5 } },
+        fmtEUR(parseFloat(amount.replace(",", ".")) || 0)
+      )
+    ),
+    h(Field, { label: "Betrag" },
+      h("input", { autoFocus: true, inputMode: "decimal", value: amount, onChange: (e) => setAmount(e.target.value), style: st.input })
+    ),
+    h("div", { style: { fontSize: 12, color: c.inkSoft, lineHeight: 1.6 } }, "Wird als Zahlung verbucht und vom Saldo abgezogen."),
+    h("button", { onClick: () => { const n = parseFloat(amount.replace(",", ".")); if (n > 0) onConfirm(n); }, style: st.primaryBtn }, "Bestätigen")
+  );
+}
+
+function MiniStat({ label, value, subValue, accent, onClick }) {
+  return h("button", { onClick, style: { ...st.card, padding: 16, textAlign: "left", borderColor: accent ? accent + "40" : c.border } },
+    h("div", { style: st.eyebrow }, label),
+    h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 30, fontWeight: 500, color: accent || c.ink, marginTop: 6, letterSpacing: -0.6, lineHeight: 1 } }, value),
+    subValue && h("div", { style: { fontSize: 11, color: accent || c.inkSoft, marginTop: 4 } }, subValue)
+  );
+}
+
+function Section({ title, action, children, actionLabel = "Alle" }) {
+  return h("div", null,
+    h("div", { style: { display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 10 } },
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 19, fontWeight: 500, color: c.ink, fontStyle: "italic", letterSpacing: -0.2 } }, title),
+      action && h("button", { onClick: action, style: st.textBtn }, `${actionLabel} →`)
+    ),
+    children
+  );
+}
+
+function Empty({ text }) {
+  return h("div", { style: { ...st.card, padding: 26, textAlign: "center", color: c.inkSoft, fontSize: 16, fontStyle: "italic", fontFamily: "'Cormorant Garamond', serif" } }, text);
+}
+
+// ============================================================
+// EXPENSES
+// ============================================================
+function Expenses({ ctx }) {
+  const { currentUser, users, expenses, categories, recurring, p, showToast } = ctx;
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [filter, setFilter] = useState("shared");
+  const [search, setSearch] = useState("");
+  const [showFilters, setShowFilters] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState(null);
+  const [monthFilter, setMonthFilter] = useState("");
+  const [showRec, setShowRec] = useState(false);
+
+  const filtered = useMemo(() => {
+    return expenses
+      .filter((e) => {
+        if (filter === "all") return true;
+        if (filter === "shared") return e.scope === "shared";
+        return e.scope === "personal" && e.paidBy === currentUser;
+      })
+      .filter((e) => {
+        if (categoryFilter && e.category !== categoryFilter) return false;
+        if (monthFilter && !e.date.startsWith(monthFilter)) return false;
+        if (search.trim()) {
+          const q = search.toLowerCase();
+          return (e.description || "").toLowerCase().includes(q) || e.category.toLowerCase().includes(q) || (e.notes || "").toLowerCase().includes(q);
+        }
+        return true;
+      })
+      .sort((a, b) => b.date.localeCompare(a.date));
+  }, [expenses, filter, currentUser, categoryFilter, monthFilter, search]);
+
+  const grouped = useMemo(() => {
+    const map = {};
+    filtered.forEach((e) => { const k = mKey(e.date); if (!map[k]) map[k] = []; map[k].push(e); });
+    return Object.entries(map).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [filtered]);
+
+  const totalShown = filtered.reduce((s, e) => s + e.amount, 0);
+
+  const remove = async (id) => {
+    if (!confirm("Diese Ausgabe wirklich löschen?")) return;
+    await p.expenses(expenses.filter((e) => e.id !== id));
+    showToast("Gelöscht");
+  };
+
+  const upsert = async (item) => {
+    if (editing) {
+      await p.expenses(expenses.map((e) => e.id === item.id ? item : e));
+      showToast("Aktualisiert");
+    } else {
+      await p.expenses([...expenses, item]);
+      showToast("Ausgabe gespeichert", "success");
+    }
+    setShowForm(false);
+    setEditing(null);
+  };
+
+  return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
+    h(PageTitle, { title: "Ausgaben", subtitle: "Wer hat was bezahlt",
+      right: h("button", { onClick: () => setShowRec(true), style: st.iconBtn, "aria-label": "Wiederkehrende" }, I.Repeat({ color: c.inkSoft, size: 15 }))
+    }),
+
+    h("div", { style: st.segmented },
+      [{ v: "shared", l: "Geteilt" }, { v: "personal", l: "Persönlich" }, { v: "all", l: "Alle" }].map((o) =>
+        h("button", { key: o.v, onClick: () => setFilter(o.v), style: { ...st.segmentedBtn, color: filter === o.v ? c.ink : c.inkSoft, background: filter === o.v ? c.surface : "transparent", fontWeight: filter === o.v ? 500 : 400 } }, o.l)
+      )
+    ),
+
+    h("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
+      h("div", { style: { position: "relative", flex: 1 } },
+        h("div", { style: { position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)" } }, I.Search({ size: 14, color: c.inkFaint })),
+        h("input", { value: search, onChange: (e) => setSearch(e.target.value), style: { ...st.input, paddingLeft: 34 }, placeholder: "Suchen…" })
+      ),
+      h("button", { onClick: () => setShowFilters(!showFilters), style: { ...st.iconBtn, background: (categoryFilter || monthFilter) ? c.ink : c.surface, borderColor: (categoryFilter || monthFilter) ? c.ink : c.border }, "aria-label": "Filter" },
+        I.Filter({ size: 15, color: (categoryFilter || monthFilter) ? c.surface : c.inkSoft })
+      )
+    ),
+
+    showFilters && h("div", { style: { ...st.card, padding: 14, marginTop: 8 } },
+      h(Field, { label: "Kategorie" },
+        h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+          h("button", { onClick: () => setCategoryFilter(null), style: { ...st.chip, ...(categoryFilter === null ? st.chipActive : {}) } }, "Alle"),
+          categories.map((cat) =>
+            h("button", { key: cat.name, onClick: () => setCategoryFilter(categoryFilter === cat.name ? null : cat.name),
+              style: { ...st.chip, ...(categoryFilter === cat.name ? { background: cat.color, color: "#fff", borderColor: cat.color } : {}) } },
+              h("span", { style: { marginRight: 4 } }, cat.icon), cat.name
+            )
+          )
+        )
+      ),
+      h("div", { style: { marginTop: 12 } },
+        h(Field, { label: "Monat" },
+          h("input", { type: "month", value: monthFilter, onChange: (e) => setMonthFilter(e.target.value), style: st.input })
+        )
+      ),
+      (categoryFilter || monthFilter) && h("button", { onClick: () => { setCategoryFilter(null); setMonthFilter(""); }, style: { ...st.textBtn, marginTop: 10 } }, "Filter zurücksetzen")
+    ),
+
+    filtered.length > 0 && h("div", { style: { marginTop: 14, fontSize: 11.5, color: c.inkSoft, padding: "0 4px", letterSpacing: 0.3 } },
+      `${filtered.length} ${filtered.length === 1 ? "Eintrag" : "Einträge"} · ${fmtEUR(totalShown)}`
+    ),
+
+    filtered.length === 0
+      ? h("div", { style: { marginTop: 12 } }, h(Empty, { text: "Keine Einträge" }))
+      : h("div", { style: { marginTop: 10 } },
+          grouped.map(([m, items]) =>
+            h("div", { key: m, style: { marginBottom: 18 } },
+              h("div", { style: { ...st.eyebrow, padding: "4px 4px 8px" } }, `${monthName(m)} · ${fmtEUR(items.reduce((s, i) => s + i.amount, 0))}`),
+              h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+                items.map((e) =>
+                  h(ExpenseRow, { key: e.id, expense: e, categories, currentUser, onEdit: () => { setEditing(e); setShowForm(true); }, onDelete: () => remove(e.id) })
+                )
+              )
+            )
+          )
+        ),
+
+    h(FAB, { onClick: () => { setEditing(null); setShowForm(true); } }),
+    showForm && h(ExpenseForm, { currentUser, users, categories, editing, onClose: () => { setShowForm(false); setEditing(null); }, onSave: upsert }),
+    showRec && h(RecurringManager, { recurring, setRecurring: p.recurring, categories, users, currentUser, onClose: () => setShowRec(false), showToast })
+  );
+}
+
+function ExpenseRow({ expense, categories, currentUser, onEdit, onDelete }) {
+  const meta = getCat(categories, expense.category);
+  const [open, setOpen] = useState(false);
+  return h("div", { style: { ...st.card, padding: 0, overflow: "hidden" } },
+    h("button", { onClick: () => setOpen(!open), style: { width: "100%", padding: 0, background: "transparent", border: "none", textAlign: "left" } },
+      h("div", { style: { display: "flex", alignItems: "center", padding: "13px 14px" } },
+        h("div", { style: { width: 36, height: 36, borderRadius: 10, background: `${meta.color}14`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, marginRight: 12, flexShrink: 0 } }, meta.icon),
+        h("div", { style: { flex: 1, minWidth: 0 } },
+          h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 } },
+            h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, expense.description || meta.name),
+            h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 20, fontWeight: 500, color: c.ink, flexShrink: 0, letterSpacing: -0.3 } }, fmtEUR(expense.amount))
+          ),
+          h("div", { style: { fontSize: 11.5, color: c.inkSoft, marginTop: 2, display: "flex", alignItems: "center", gap: 6 } },
+            h("span", null, `${fmtDate(expense.date)} · ${expense.paidBy}`),
+            expense.scope === "shared" && expense.splitType !== "equal" && h("span", { style: st.badge },
+              expense.splitType === "full_payer" ? "alleine" : "ungleich"
+            ),
+            expense.recurringSource && I.Repeat({ size: 10, color: c.inkFaint }),
+            expense.notes && h("span", { style: { ...st.dot, background: c.ochre } })
+          )
+        )
+      )
+    ),
+    open && h("div", { style: { borderTop: `1px solid ${c.border}`, padding: "12px 14px", background: c.surfaceAlt } },
+      expense.notes && h("div", { style: { fontSize: 15, color: c.inkSoft, marginBottom: 10, fontStyle: "italic", fontFamily: "'Cormorant Garamond', serif", lineHeight: 1.4 } }, `"${expense.notes}"`),
+      h("div", { style: { fontSize: 11.5, color: c.inkSoft, marginBottom: 12 } },
+        h("span", { style: { fontWeight: 500, color: c.ink } }, meta.name),
+        expense.scope === "personal" && " · persönlich"
+      ),
+      expense.paidBy === currentUser && h("div", { style: { display: "flex", gap: 8 } },
+        h("button", { onClick: onEdit, style: st.smallBtn }, I.Edit({ size: 11 }), " Bearbeiten"),
+        h("button", { onClick: onDelete, style: { ...st.smallBtn, color: c.warn } }, I.Trash({ size: 11 }), " Löschen")
+      )
+    )
+  );
+}
+
+function ExpenseForm({ currentUser, users, categories, editing, onClose, onSave }) {
+  const [amount, setAmount] = useState(editing ? String(editing.amount).replace(".", ",") : "");
+  const [category, setCategory] = useState(editing?.category || categories[0]?.name || "Sonstiges");
+  const [description, setDescription] = useState(editing?.description || "");
+  const [notes, setNotes] = useState(editing?.notes || "");
+  const [date, setDate] = useState(editing?.date || today());
+  const [scope, setScope] = useState(editing?.scope || "shared");
+  const [paidBy, setPaidBy] = useState(editing?.paidBy || currentUser);
+  const [splitType, setSplitType] = useState(editing?.splitType || "equal");
+  const [splitRatio, setSplitRatio] = useState(editing?.splitRatio || { [users[0]]: 50, [users[1]]: 50 });
+  const [showNotes, setShowNotes] = useState(!!editing?.notes);
+
+  const submit = () => {
+    const num = parseFloat(amount.replace(",", "."));
+    if (!num || num <= 0) return;
+    onSave({
+      id: editing?.id || uid(),
+      amount: num, category,
+      description: description.trim(),
+      notes: notes.trim(),
+      date, paidBy, scope,
+      splitType: scope === "shared" ? splitType : "equal",
+      splitRatio: splitType === "custom" ? splitRatio : null,
+      recurringSource: editing?.recurringSource || null,
+    });
+  };
+
+  return h(Modal, { onClose, title: editing ? "Bearbeiten" : "Neue Ausgabe" },
+    h(Field, { label: "Betrag" },
+      h("input", { autoFocus: !editing, inputMode: "decimal", value: amount, onChange: (e) => setAmount(e.target.value),
+        style: { ...st.input, fontFamily: "'Cormorant Garamond', serif", fontSize: 32, fontWeight: 500, textAlign: "center", letterSpacing: -0.5 },
+        placeholder: "0,00 €" })
+    ),
+    h(Field, { label: "Beschreibung" },
+      h("input", { value: description, onChange: (e) => setDescription(e.target.value), style: st.input, placeholder: "z. B. Wocheneinkauf" })
+    ),
+    h(Field, { label: "Kategorie" },
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+        categories.map((cat) =>
+          h("button", { key: cat.name, onClick: () => setCategory(cat.name),
+            style: { ...st.chip, ...(category === cat.name ? { background: cat.color, color: "#fff", borderColor: cat.color } : {}) } },
+            h("span", { style: { marginRight: 4 } }, cat.icon), cat.name
+          )
+        )
+      )
+    ),
+    h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
+      h(Field, { label: "Datum" }, h("input", { type: "date", value: date, onChange: (e) => setDate(e.target.value), style: st.input })),
+      h(Field, { label: "Bezahlt von" },
+        h("select", { value: paidBy, onChange: (e) => setPaidBy(e.target.value), style: st.input },
+          users.map((u) => h("option", { key: u, value: u }, u))
+        )
+      )
+    ),
+    h(Field, { label: "Bereich" },
+      h("div", { style: st.segmented },
+        h("button", { onClick: () => setScope("shared"), style: { ...st.segmentedBtn, background: scope === "shared" ? c.ink : "transparent", color: scope === "shared" ? c.surface : c.inkSoft } }, "Geteilt"),
+        h("button", { onClick: () => setScope("personal"), style: { ...st.segmentedBtn, background: scope === "personal" ? c.ink : "transparent", color: scope === "personal" ? c.surface : c.inkSoft } }, "Persönlich")
+      )
+    ),
+    scope === "shared" && h(Field, { label: "Aufteilung" },
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+        h("button", { onClick: () => setSplitType("equal"), style: { ...st.chip, ...(splitType === "equal" ? st.chipActive : {}) } }, "50/50"),
+        h("button", { onClick: () => setSplitType("custom"), style: { ...st.chip, ...(splitType === "custom" ? st.chipActive : {}) } }, "Ungleich (%)"),
+        h("button", { onClick: () => setSplitType("full_payer"), style: { ...st.chip, ...(splitType === "full_payer" ? st.chipActive : {}) } }, `${paidBy} alleine`)
+      ),
+      splitType === "custom" && h("div", { style: { marginTop: 12, padding: 14, background: c.surfaceAlt, borderRadius: 10 } },
+        users.map((u, i) =>
+          h("div", { key: u, style: { display: "flex", alignItems: "center", gap: 10, marginBottom: i === 0 ? 10 : 0 } },
+            h("div", { style: { width: 60, fontSize: 13, color: c.ink, fontWeight: 500 } }, u),
+            h("input", { type: "number", min: "0", max: "100", value: splitRatio[u] || 0,
+              onChange: (e) => {
+                const v = parseInt(e.target.value) || 0;
+                const next = { ...splitRatio, [u]: v };
+                const otherU = users.find((x) => x !== u);
+                if (otherU) next[otherU] = Math.max(0, 100 - v);
+                setSplitRatio(next);
+              },
+              style: { ...st.input, padding: "8px 10px", textAlign: "center", flex: 1 }
+            }),
+            h("div", { style: { fontSize: 13, color: c.inkSoft } }, "%")
+          )
+        ),
+        h("div", { style: { marginTop: 8, fontSize: 11, color: c.inkSoft, textAlign: "center" } },
+          `Summe: ${(splitRatio[users[0]] || 0) + (splitRatio[users[1]] || 0)}%`
+        )
+      )
+    ),
+    h("button", { onClick: () => setShowNotes(!showNotes), style: { ...st.textBtn, alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 4 } },
+      h("span", { style: { transform: showNotes ? "rotate(180deg)" : "none", transition: "0.2s", display: "inline-flex" } }, I.ChevDown({ size: 13 })),
+      `Notiz ${notes ? "bearbeiten" : "hinzufügen"}`
+    ),
+    showNotes && h(Field, { label: "Notiz" },
+      h("textarea", { value: notes, onChange: (e) => setNotes(e.target.value), style: { ...st.input, minHeight: 70, resize: "vertical" }, placeholder: "z. B. Beleg im Ordner, mit Anna unterwegs…" })
+    ),
+    h("button", { onClick: submit, style: st.primaryBtn }, editing ? "Aktualisieren" : "Speichern")
+  );
+}
+
+// ============================================================
+// RECURRING MANAGER
+// ============================================================
+function RecurringManager({ recurring, setRecurring, categories, users, currentUser, onClose, showToast }) {
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  const upsert = async (item) => {
+    if (editing) await setRecurring(recurring.map((r) => r.id === item.id ? item : r));
+    else await setRecurring([...recurring, item]);
+    setShowForm(false); setEditing(null);
+    showToast("Vorlage gespeichert", "success");
+  };
+
+  const toggleActive = async (id) => {
+    await setRecurring(recurring.map((r) => r.id === id ? { ...r, active: !r.active } : r));
+  };
+
+  const remove = async (id) => {
+    if (!confirm("Vorlage löschen? Bereits erzeugte Einträge bleiben.")) return;
+    await setRecurring(recurring.filter((r) => r.id !== id));
+    showToast("Gelöscht");
+  };
+
+  return h(Modal, { onClose, title: "Wiederkehrend" },
+    h("div", { style: { fontSize: 15, color: c.inkSoft, lineHeight: 1.6, fontFamily: "'Cormorant Garamond', serif", fontStyle: "italic" } },
+      "Werden automatisch jeden Monat oder jede Woche als neue Ausgabe erzeugt."
+    ),
+    recurring.length === 0
+      ? h(Empty, { text: "Noch keine Vorlagen" })
+      : h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+          recurring.map((r) => {
+            const meta = getCat(categories, r.category);
+            return h("div", { key: r.id, style: { ...st.row, opacity: r.active ? 1 : 0.5, padding: "12px 14px" } },
+              h("div", { style: { width: 34, height: 34, borderRadius: 9, background: `${meta.color}14`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, marginRight: 10, flexShrink: 0 } }, meta.icon),
+              h("div", { style: { flex: 1, minWidth: 0 } },
+                h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.description),
+                h("div", { style: { fontSize: 11, color: c.inkSoft, marginTop: 2 } }, `${fmtEUR(r.amount)} · ${r.frequency === "monthly" ? "monatlich" : "wöchentlich"} · ${r.paidBy}`)
+              ),
+              h("button", { onClick: () => toggleActive(r.id), style: st.miniBtn },
+                r.active ? I.Check({ size: 14, color: c.success, strokeWidth: 2 }) : I.X({ size: 14, color: c.inkFaint, strokeWidth: 2 })
+              ),
+              h("button", { onClick: () => { setEditing(r); setShowForm(true); }, style: st.miniBtn }, I.Edit({ size: 12, color: c.inkSoft })),
+              h("button", { onClick: () => remove(r.id), style: st.miniBtn }, I.Trash({ size: 12, color: c.inkSoft }))
+            );
+          })
+        ),
+    h("button", { onClick: () => { setEditing(null); setShowForm(true); }, style: st.primaryBtn },
+      I.Plus({ size: 15, strokeWidth: 2 }), " Vorlage hinzufügen"
+    ),
+    showForm && h(RecurringForm, { currentUser, users, categories, editing, onClose: () => { setShowForm(false); setEditing(null); }, onSave: upsert })
+  );
+}
+
+function RecurringForm({ currentUser, users, categories, editing, onClose, onSave }) {
+  const [amount, setAmount] = useState(editing ? String(editing.amount).replace(".", ",") : "");
+  const [description, setDescription] = useState(editing?.description || "");
+  const [category, setCategory] = useState(editing?.category || categories[0]?.name);
+  const [frequency, setFrequency] = useState(editing?.frequency || "monthly");
+  const [paidBy, setPaidBy] = useState(editing?.paidBy || currentUser);
+  const [startDate, setStartDate] = useState(editing?.startDate || today());
+  const [splitType, setSplitType] = useState(editing?.splitType || "equal");
+  const [splitRatio, setSplitRatio] = useState(editing?.splitRatio || { [users[0]]: 50, [users[1]]: 50 });
+
+  const submit = () => {
+    const num = parseFloat(amount.replace(",", "."));
+    if (!num || !description.trim()) return;
+    onSave({
+      id: editing?.id || uid(),
+      amount: num, description: description.trim(), category, frequency, paidBy, startDate,
+      lastGenerated: editing?.lastGenerated || null,
+      active: editing?.active ?? true,
+      scope: "shared",
+      splitType,
+      splitRatio: splitType === "custom" ? splitRatio : null,
+    });
+  };
+
+  return h(Modal, { onClose, title: editing ? "Vorlage bearbeiten" : "Neue Vorlage" },
+    h(Field, { label: "Beschreibung" }, h("input", { value: description, onChange: (e) => setDescription(e.target.value), style: st.input, placeholder: "z. B. Miete, Netflix", autoFocus: true })),
+    h(Field, { label: "Betrag" }, h("input", { inputMode: "decimal", value: amount, onChange: (e) => setAmount(e.target.value), style: st.input, placeholder: "0,00 €" })),
+    h(Field, { label: "Kategorie" },
+      h("select", { value: category, onChange: (e) => setCategory(e.target.value), style: st.input },
+        categories.map((cat) => h("option", { key: cat.name, value: cat.name }, `${cat.icon} ${cat.name}`))
+      )
+    ),
+    h(Field, { label: "Rhythmus" },
+      h("div", { style: st.segmented },
+        h("button", { onClick: () => setFrequency("monthly"), style: { ...st.segmentedBtn, background: frequency === "monthly" ? c.ink : "transparent", color: frequency === "monthly" ? c.surface : c.inkSoft } }, "Monatlich"),
+        h("button", { onClick: () => setFrequency("weekly"), style: { ...st.segmentedBtn, background: frequency === "weekly" ? c.ink : "transparent", color: frequency === "weekly" ? c.surface : c.inkSoft } }, "Wöchentlich")
+      )
+    ),
+    h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
+      h(Field, { label: "Startdatum" }, h("input", { type: "date", value: startDate, onChange: (e) => setStartDate(e.target.value), style: st.input })),
+      h(Field, { label: "Bezahlt von" },
+        h("select", { value: paidBy, onChange: (e) => setPaidBy(e.target.value), style: st.input },
+          users.map((u) => h("option", { key: u, value: u }, u))
+        )
+      )
+    ),
+    h(Field, { label: "Aufteilung" },
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+        h("button", { onClick: () => setSplitType("equal"), style: { ...st.chip, ...(splitType === "equal" ? st.chipActive : {}) } }, "50/50"),
+        h("button", { onClick: () => setSplitType("custom"), style: { ...st.chip, ...(splitType === "custom" ? st.chipActive : {}) } }, "Ungleich")
+      ),
+      splitType === "custom" && h("div", { style: { marginTop: 10, padding: 12, background: c.surfaceAlt, borderRadius: 10 } },
+        users.map((u, i) =>
+          h("div", { key: u, style: { display: "flex", alignItems: "center", gap: 10, marginBottom: i === 0 ? 8 : 0 } },
+            h("div", { style: { width: 60, fontSize: 13, color: c.ink, fontWeight: 500 } }, u),
+            h("input", { type: "number", min: "0", max: "100", value: splitRatio[u] || 0,
+              onChange: (e) => {
+                const v = parseInt(e.target.value) || 0;
+                const next = { ...splitRatio, [u]: v };
+                const otherU = users.find((x) => x !== u);
+                if (otherU) next[otherU] = Math.max(0, 100 - v);
+                setSplitRatio(next);
+              },
+              style: { ...st.input, padding: "8px 10px", textAlign: "center", flex: 1 }
+            }),
+            h("div", { style: { fontSize: 13, color: c.inkSoft } }, "%")
+          )
+        )
+      )
+    ),
+    h("button", { onClick: submit, style: st.primaryBtn }, "Speichern")
+  );
+}
+
+// ============================================================
+// TASKS
+// ============================================================
+function Tasks({ ctx }) {
+  const { currentUser, users, tasks, p, showToast } = ctx;
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [filter, setFilter] = useState("open");
+  const [assignFilter, setAssignFilter] = useState("all");
+
+  const toggle = async (id) => {
+    const task = tasks.find((t) => t.id === id);
+    const next = tasks.map((t) => {
+      if (t.id !== id) return t;
+      const newCompleted = !t.completed;
+      const history = [...(t.history || [])];
+      if (newCompleted) history.push({ date: today(), by: currentUser });
+      return { ...t, completed: newCompleted, lastCompleted: newCompleted ? today() : t.lastCompleted, history };
+    });
+    await p.tasks(next);
+    if (task && !task.completed) showToast(`"${task.title}" erledigt`, "success");
+  };
+
+  const remove = async (id) => {
+    if (!confirm("Diese Aufgabe wirklich löschen?")) return;
+    await p.tasks(tasks.filter((t) => t.id !== id));
+    showToast("Gelöscht");
+  };
+
+  const upsert = async (t) => {
+    if (editing) {
+      await p.tasks(tasks.map((x) => x.id === t.id ? t : x));
+      showToast("Aktualisiert");
+    } else {
+      await p.tasks([...tasks, t]);
+      showToast("Aufgabe angelegt", "success");
+    }
+    setShowForm(false); setEditing(null);
+  };
+
+  const visible = useMemo(() => {
+    return tasks
+      .filter((t) => filter === "open" ? !t.completed : filter === "done" ? t.completed : true)
+      .filter((t) => assignFilter === "all" || t.assignedTo === assignFilter || (assignFilter === currentUser && t.assignedTo === "Beide"))
+      .sort((a, b) => {
+        if (a.completed !== b.completed) return a.completed ? 1 : -1;
+        const pOrder = { high: 0, normal: 1, low: 2 };
+        const pDiff = (pOrder[a.priority] ?? 1) - (pOrder[b.priority] ?? 1);
+        if (pDiff !== 0 && !a.completed) return pDiff;
+        const aD = a.dueDate || "9999"; const bD = b.dueDate || "9999";
+        return aD.localeCompare(bD);
+      });
+  }, [tasks, filter, assignFilter, currentUser]);
+
+  return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
+    h(PageTitle, { title: "Aufgaben", subtitle: "Putzplan & To-Dos" }),
+    h("div", { style: st.segmented },
+      [{ v: "open", l: "Offen" }, { v: "done", l: "Erledigt" }, { v: "all", l: "Alle" }].map((o) =>
+        h("button", { key: o.v, onClick: () => setFilter(o.v),
+          style: { ...st.segmentedBtn, color: filter === o.v ? c.ink : c.inkSoft, background: filter === o.v ? c.surface : "transparent", fontWeight: filter === o.v ? 500 : 400 }
+        }, o.l)
+      )
+    ),
+    h("div", { style: { display: "flex", gap: 6, marginTop: 10, overflowX: "auto", paddingBottom: 2 } },
+      h("button", { onClick: () => setAssignFilter("all"), style: { ...st.chip, flexShrink: 0, ...(assignFilter === "all" ? st.chipActive : {}) } }, "Alle"),
+      users.map((u) =>
+        h("button", { key: u, onClick: () => setAssignFilter(u), style: { ...st.chip, flexShrink: 0, ...(assignFilter === u ? st.chipActive : {}) } }, u)
+      ),
+      h("button", { onClick: () => setAssignFilter("Beide"), style: { ...st.chip, flexShrink: 0, ...(assignFilter === "Beide" ? st.chipActive : {}) } }, "Beide")
+    ),
+    visible.length === 0
+      ? h("div", { style: { marginTop: 16 } }, h(Empty, { text: filter === "done" ? "Noch nichts erledigt" : "Alles geschafft ✿" }))
+      : h("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginTop: 16 } },
+          visible.map((t) =>
+            h(TaskRow, { key: t.id, task: t, onToggle: () => toggle(t.id), onEdit: () => { setEditing(t); setShowForm(true); }, onDelete: () => remove(t.id) })
+          )
+        ),
+    h(FAB, { onClick: () => { setEditing(null); setShowForm(true); } }),
+    showForm && h(TaskForm, { users, currentUser, editing, onClose: () => { setShowForm(false); setEditing(null); }, onSave: upsert })
+  );
+}
+
+function TaskRow({ task, onToggle, onEdit, onDelete }) {
+  const [open, setOpen] = useState(false);
+  const overdue = task.dueDate && !task.completed && task.dueDate < today();
+  const dueToday = task.dueDate === today() && !task.completed;
+  return h("div", { style: { ...st.card, padding: 0, overflow: "hidden", borderColor: overdue ? c.warn + "40" : c.border, position: "relative" } },
+    task.priority === "high" && !task.completed && h("div", { style: { position: "absolute", left: 0, top: 0, bottom: 0, width: 3, background: c.accent } }),
+    h("div", { style: { display: "flex", alignItems: "center", padding: "13px 14px", paddingLeft: task.priority === "high" && !task.completed ? 17 : 14 } },
+      h("button", { onClick: onToggle, style: { ...st.checkbox, background: task.completed ? c.forest : "transparent", borderColor: task.completed ? c.forest : c.borderStrong }, "aria-label": "Erledigt" },
+        task.completed && I.Check({ size: 13, color: c.surface, strokeWidth: 2.5 })
+      ),
+      h("button", { onClick: () => setOpen(!open), style: { flex: 1, background: "transparent", border: "none", textAlign: "left", padding: 0, marginLeft: 12, minWidth: 0 } },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 6 } },
+          h("div", { style: { fontWeight: 500, color: task.completed ? c.inkSoft : c.ink, fontSize: 14.5, textDecoration: task.completed ? "line-through" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 } }, task.title),
+          task.priority === "high" && !task.completed && I.Star({ size: 12, color: c.accent })
+        ),
+        h("div", { style: { fontSize: 11.5, color: overdue ? c.warn : dueToday ? c.ochre : c.inkSoft, marginTop: 2, display: "flex", alignItems: "center", gap: 6 } },
+          task.recurring && I.Repeat({ size: 10 }),
+          task.rotate && I.Rotate({ size: 10 }),
+          h("span", null, task.assignedTo),
+          task.dueDate && h("span", null, `· ${overdue ? "überfällig: " : dueToday ? "heute" : "bis "}${!dueToday ? fmtDate(task.dueDate) : ""}`),
+          task.recurring && h("span", null, `· ${recurringLabel(task.recurring)}`)
+        )
+      ),
+      h("button", { onClick: () => setOpen(!open), style: st.miniBtn },
+        h("span", { style: { transform: open ? "rotate(180deg)" : "none", transition: "0.2s", display: "inline-flex" } }, I.ChevDown({ size: 15, color: c.inkFaint }))
+      )
+    ),
+    open && h("div", { style: { borderTop: `1px solid ${c.border}`, padding: "12px 14px", background: c.surfaceAlt } },
+      task.history && task.history.length > 0 && h("div", { style: { marginBottom: 12 } },
+        h("div", { style: { ...st.eyebrow, marginBottom: 6 } }, "Letzte Erledigungen"),
+        h("div", { style: { display: "flex", flexDirection: "column", gap: 4 } },
+          task.history.slice(-3).reverse().map((entry, i) =>
+            h("div", { key: i, style: { fontSize: 12, color: c.inkSoft, display: "flex", justifyContent: "space-between" } },
+              h("span", null, entry.by),
+              h("span", null, fmtDate(entry.date, { day: "numeric", month: "short", year: "numeric" }))
+            )
+          )
+        ),
+        task.rotate && task.history.length >= 2 && h("div", { style: { fontSize: 11, color: c.inkSoft, marginTop: 6, fontStyle: "italic" } },
+          `Rotiert · ${task.rotationIndex || 0} Wechsel`
+        )
+      ),
+      h("div", { style: { display: "flex", gap: 8 } },
+        h("button", { onClick: onEdit, style: st.smallBtn }, I.Edit({ size: 11 }), " Bearbeiten"),
+        h("button", { onClick: onDelete, style: { ...st.smallBtn, color: c.warn } }, I.Trash({ size: 11 }), " Löschen")
+      )
+    )
+  );
+}
+
+function recurringLabel(r) {
+  return { daily: "täglich", weekly: "wöchentlich", biweekly: "alle 2 Wochen", monthly: "monatlich" }[r] || "";
+}
+
+function TaskForm({ users, currentUser, editing, onClose, onSave }) {
+  const [title, setTitle] = useState(editing?.title || "");
+  const [assignedTo, setAssignedTo] = useState(editing?.assignedTo || currentUser);
+  const [dueDate, setDueDate] = useState(editing?.dueDate || "");
+  const [recurring, setRecurring] = useState(editing?.recurring || null);
+  const [priority, setPriority] = useState(editing?.priority || "normal");
+  const [rotate, setRotate] = useState(editing?.rotate || false);
+
+  const assignOptions = [...users, "Beide"];
+
+  const submit = () => {
+    if (!title.trim()) return;
+    onSave({
+      id: editing?.id || uid(),
+      title: title.trim(), assignedTo,
+      dueDate: dueDate || null,
+      recurring, priority,
+      rotate: recurring && users.length >= 2 ? rotate : false,
+      rotationIndex: editing?.rotationIndex || 0,
+      completed: editing?.completed || false,
+      lastCompleted: editing?.lastCompleted || null,
+      history: editing?.history || [],
+    });
+  };
+
+  return h(Modal, { onClose, title: editing ? "Aufgabe bearbeiten" : "Neue Aufgabe" },
+    h(Field, { label: "Was ist zu tun?" },
+      h("input", { autoFocus: !editing, value: title, onChange: (e) => setTitle(e.target.value), style: st.input, placeholder: "z. B. Bad putzen" })
+    ),
+    h(Field, { label: "Zugewiesen an" },
+      h("div", { style: { display: "flex", gap: 6 } },
+        assignOptions.map((u) =>
+          h("button", { key: u, onClick: () => setAssignedTo(u), style: { ...st.chip, flex: 1, ...(assignedTo === u ? st.chipActive : {}) } }, u)
+        )
+      )
+    ),
+    h(Field, { label: "Priorität" },
+      h("div", { style: { display: "flex", gap: 6 } },
+        [{ v: "low", l: "Niedrig" }, { v: "normal", l: "Normal" }, { v: "high", l: "Hoch" }].map((o) =>
+          h("button", { key: o.v, onClick: () => setPriority(o.v),
+            style: { ...st.chip, flex: 1, ...(priority === o.v ? (o.v === "high" ? { background: c.accent, color: "#fff", borderColor: c.accent } : st.chipActive) : {}) }
+          }, o.l)
+        )
+      )
+    ),
+    h(Field, { label: "Fällig bis (optional)" },
+      h("input", { type: "date", value: dueDate, onChange: (e) => setDueDate(e.target.value), style: st.input })
+    ),
+    h(Field, { label: "Wiederholung" },
+      h("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+        [{ v: null, l: "Einmalig" }, { v: "daily", l: "Täglich" }, { v: "weekly", l: "Wöchentlich" }, { v: "biweekly", l: "2-wöchentlich" }, { v: "monthly", l: "Monatlich" }].map((o) =>
+          h("button", { key: o.l, onClick: () => setRecurring(o.v), style: { ...st.chip, ...(recurring === o.v ? st.chipActive : {}) } }, o.l)
+        )
+      )
+    ),
+    recurring && users.length >= 2 && h(Field, { label: "Rotation" },
+      h("button", { onClick: () => setRotate(!rotate),
+        style: { ...st.row, justifyContent: "space-between", padding: "12px 14px", background: rotate ? c.forestSoft : c.surface, borderColor: rotate ? c.forest + "40" : c.border }
+      },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 10 } },
+          I.Rotate({ size: 16, color: rotate ? c.forest : c.inkSoft }),
+          h("div", { style: { textAlign: "left" } },
+            h("div", { style: { fontSize: 13.5, fontWeight: 500, color: c.ink } }, "Person automatisch wechseln"),
+            h("div", { style: { fontSize: 11.5, color: c.inkSoft, marginTop: 1 } }, "Beim Reset wird die nächste Person zugewiesen")
+          )
+        ),
+        h("div", { style: { ...st.toggle, background: rotate ? c.forest : c.borderStrong } },
+          h("div", { style: { ...st.toggleDot, left: rotate ? 18 : 2 } })
+        )
+      )
+    ),
+    h("button", { onClick: submit, style: st.primaryBtn }, editing ? "Aktualisieren" : "Speichern")
+  );
+}
+
+// ============================================================
+// SHOPPING
+// ============================================================
+function Shopping({ ctx }) {
+  const { currentUser, shopping, p, showToast } = ctx;
+  const [input, setInput] = useState("");
+  const [qty, setQty] = useState("");
+
+  const open = shopping.filter((s) => !s.bought);
+  const bought = shopping.filter((s) => s.bought);
+
+  const add = async () => {
+    const v = input.trim();
+    if (!v) return;
+    await p.shopping([...shopping, { id: uid(), item: v, qty: qty.trim() || null, addedBy: currentUser, bought: false, urgent: false, addedAt: today() }]);
+    setInput(""); setQty("");
+  };
+
+  const toggle = async (id) => {
+    const item = shopping.find((s) => s.id === id);
+    await p.shopping(shopping.map((s) => s.id === id ? { ...s, bought: !s.bought, boughtBy: !s.bought ? currentUser : null, boughtAt: !s.bought ? today() : null } : s));
+    if (item && !item.bought) showToast(`"${item.item}" gekauft`, "success");
+  };
+
+  const toggleUrgent = async (id) => {
+    await p.shopping(shopping.map((s) => s.id === id ? { ...s, urgent: !s.urgent } : s));
+  };
+
+  const remove = async (id) => { await p.shopping(shopping.filter((s) => s.id !== id)); };
+
+  const clearBought = async () => {
+    if (!confirm("Gekaufte Artikel entfernen?")) return;
+    await p.shopping(shopping.filter((s) => !s.bought));
+    showToast("Aufgeräumt");
+  };
+
+  return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
+    h(PageTitle, { title: "Einkaufen", subtitle: "Was fehlt zuhause" }),
+    h("div", { style: { display: "flex", gap: 8, marginBottom: 16 } },
+      h("input", { value: input, onChange: (e) => setInput(e.target.value), onKeyDown: (e) => e.key === "Enter" && add(), style: { ...st.input, flex: 1 }, placeholder: "Artikel…" }),
+      h("input", { value: qty, onChange: (e) => setQty(e.target.value), onKeyDown: (e) => e.key === "Enter" && add(), style: { ...st.input, width: 70, textAlign: "center" }, placeholder: "Menge" }),
+      h("button", { onClick: add, style: { ...st.primaryBtn, padding: "0 16px", width: "auto", margin: 0, minHeight: 44, height: 44 } }, I.Plus({ size: 17, strokeWidth: 2, color: c.surface }))
+    ),
+    open.length === 0 && bought.length === 0 && h(Empty, { text: "Liste ist leer" }),
+    open.length > 0 && h(React.Fragment, null,
+      h("div", { style: { ...st.eyebrow, marginBottom: 10 } }, `Offen · ${open.length}`),
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+        open.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0)).map((s) =>
+          h("div", { key: s.id, style: { ...st.row, padding: "10px 12px", borderColor: s.urgent ? c.warn + "40" : c.border, background: s.urgent ? c.warnBg : c.surface } },
+            h("button", { onClick: () => toggle(s.id), style: st.checkbox, "aria-label": "Gekauft" }),
+            h("div", { style: { flex: 1, marginLeft: 10, minWidth: 0 } },
+              h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14.5, display: "flex", alignItems: "center", gap: 6 } },
+                s.urgent && I.Alert({ size: 12, color: c.warn, strokeWidth: 2 }),
+                h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, s.item),
+                s.qty && h("span", { style: { fontSize: 12, color: c.inkSoft, fontWeight: 400, marginLeft: "auto", flexShrink: 0 } }, s.qty)
+              ),
+              h("div", { style: { fontSize: 11, color: c.inkFaint, marginTop: 1 } }, `von ${s.addedBy}`)
+            ),
+            h("button", { onClick: () => toggleUrgent(s.id), style: st.miniBtn, "aria-label": "Dringend" },
+              I.Alert({ size: 13, color: s.urgent ? c.warn : c.inkFaint, strokeWidth: 2 })
+            ),
+            h("button", { onClick: () => remove(s.id), style: st.miniBtn, "aria-label": "Löschen" },
+              I.X({ size: 13, color: c.inkFaint, strokeWidth: 2 })
+            )
+          )
+        )
+      )
+    ),
+    bought.length > 0 && h(React.Fragment, null,
+      h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 24, marginBottom: 8 } },
+        h("div", { style: st.eyebrow }, `Gekauft · ${bought.length}`),
+        h("button", { onClick: clearBought, style: st.textBtn }, "Aufräumen")
+      ),
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 5 } },
+        bought.map((s) =>
+          h("div", { key: s.id, style: { ...st.row, padding: "10px 12px", opacity: 0.5 } },
+            h("button", { onClick: () => toggle(s.id), style: { ...st.checkbox, background: c.forest, borderColor: c.forest } },
+              I.Check({ size: 13, color: c.surface, strokeWidth: 2.5 })
+            ),
+            h("div", { style: { flex: 1, marginLeft: 10, fontSize: 13.5, color: c.inkSoft, textDecoration: "line-through", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+              s.item, s.qty && h("span", { style: { fontSize: 11 } }, ` · ${s.qty}`)
+            ),
+            s.boughtBy && h("div", { style: { fontSize: 11, color: c.inkFaint } }, s.boughtBy)
+          )
+        )
+      )
+    )
+  );
+}
+
+// ============================================================
+// STATS
+// ============================================================
+function Stats({ ctx }) {
+  const { expenses, categories, users, budgets } = ctx;
+  const [selectedMonth, setSelectedMonth] = useState(today().slice(0, 7));
+
+  const monthExpenses = expenses.filter((e) => e.scope === "shared" && e.date.startsWith(selectedMonth));
+
+  const byCategory = useMemo(() => {
+    const map = {};
+    monthExpenses.forEach((e) => { map[e.category] = (map[e.category] || 0) + e.amount; });
+    return Object.entries(map)
+      .map(([name, value]) => {
+        const meta = getCat(categories, name);
+        return { name, value, color: meta.color, icon: meta.icon };
+      })
+      .sort((a, b) => b.value - a.value);
+  }, [monthExpenses, categories]);
+
+  const total = byCategory.reduce((s, x) => s + x.value, 0);
+
+  const last12 = useMemo(() => {
+    const months = [];
+    const now = new Date();
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const key = d.toISOString().slice(0, 7);
+      const label = d.toLocaleDateString("de-DE", { month: "short" });
+      const sum = expenses.filter((e) => e.scope === "shared" && e.date.startsWith(key)).reduce((s, e) => s + e.amount, 0);
+      months.push({ label, sum: Math.round(sum), key });
+    }
+    return months;
+  }, [expenses]);
+
+  const monthsWithData = last12.filter((m) => m.sum > 0);
+  const avgMonth = monthsWithData.length > 0 ? monthsWithData.reduce((s, m) => s + m.sum, 0) / monthsWithData.length : 0;
+  const lastMonth = last12[last12.length - 2]?.sum || 0;
+  const thisMonthSum = last12[last12.length - 1]?.sum || 0;
+  const trend = lastMonth > 0 ? ((thisMonthSum - lastMonth) / lastMonth) * 100 : 0;
+
+  const byUser = useMemo(() => users.map((u) => ({
+    name: u,
+    sum: monthExpenses.filter((e) => e.paidBy === u).reduce((s, e) => s + e.amount, 0),
+  })), [monthExpenses, users]);
+
+  const monthOptions = useMemo(() => {
+    const set = new Set();
+    expenses.forEach((e) => set.add(e.date.slice(0, 7)));
+    set.add(today().slice(0, 7));
+    return Array.from(set).sort((a, b) => b.localeCompare(a));
+  }, [expenses]);
+
+  return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
+    h(PageTitle, { title: "Statistiken", subtitle: "Geteilte Ausgaben" }),
+    h("select", { value: selectedMonth, onChange: (e) => setSelectedMonth(e.target.value), style: { ...st.input, marginBottom: 16 } },
+      monthOptions.map((m) => h("option", { key: m, value: m }, monthName(m)))
+    ),
+    h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 14 } },
+      h("div", { style: { ...st.card, padding: 16 } },
+        h("div", { style: st.eyebrow }, "Gesamt"),
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 26, fontWeight: 500, color: c.ink, marginTop: 6, letterSpacing: -0.5 } }, fmtEURc(total)),
+        h("div", { style: { fontSize: 11, color: c.inkSoft, marginTop: 2 } },
+          `${monthExpenses.length} ${monthExpenses.length === 1 ? "Eintrag" : "Einträge"}`
+        )
+      ),
+      h("div", { style: { ...st.card, padding: 16 } },
+        h("div", { style: st.eyebrow }, "vs. Vormonat"),
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 26, fontWeight: 500, color: trend > 0 ? c.warn : c.success, marginTop: 6, letterSpacing: -0.5 } },
+          lastMonth > 0 ? `${trend > 0 ? "+" : ""}${Math.round(trend)}%` : "—"
+        ),
+        h("div", { style: { fontSize: 11, color: c.inkSoft, marginTop: 2 } }, `Ø ${fmtEURc(avgMonth)}`)
+      )
+    ),
+    byCategory.length > 0 && h("div", { style: { ...st.card, padding: 18, marginBottom: 14 } },
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: c.ink, fontStyle: "italic", marginBottom: 14 } }, "Nach Kategorie"),
+      h("div", { style: { height: 180 } },
+        h(ResponsiveContainer, { width: "100%", height: "100%" },
+          h(PieChart, null,
+            h(Pie, { data: byCategory, dataKey: "value", nameKey: "name", innerRadius: 50, outerRadius: 78, paddingAngle: 2 },
+              byCategory.map((entry, i) => h(Cell, { key: i, fill: entry.color }))
+            ),
+            h(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { background: c.surface, border: `1px solid ${c.border}`, borderRadius: 8, fontSize: 12 } })
+          )
+        )
+      ),
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginTop: 12 } },
+        byCategory.map((cat) => {
+          const budget = budgets[cat.name];
+          const overBudget = budget && cat.value > budget;
+          return h("div", { key: cat.name, style: { display: "flex", flexDirection: "column", gap: 5 } },
+            h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
+              h("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+                h("div", { style: { width: 7, height: 7, borderRadius: 2, background: cat.color } }),
+                h("span", { style: { fontSize: 13, color: c.ink } }, `${cat.icon} ${cat.name}`)
+              ),
+              h("div", { style: { fontSize: 13, color: overBudget ? c.warn : c.ink, fontWeight: 500 } },
+                fmtEUR(cat.value),
+                h("span", { style: { color: c.inkFaint, fontWeight: 400, fontSize: 11 } }, ` · ${Math.round((cat.value / total) * 100)}%`)
+              )
+            ),
+            budget && h("div", { style: { ...st.progressTrack, height: 3, marginLeft: 15 } },
+              h("div", { style: { ...st.progressFill, width: `${Math.min(100, (cat.value / budget) * 100)}%`, background: overBudget ? c.warn : cat.color, height: 3 } })
+            )
+          );
+        })
+      )
+    ),
+    h("div", { style: { ...st.card, padding: 18, marginBottom: 14 } },
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: c.ink, fontStyle: "italic", marginBottom: 14 } }, "Verlauf · 12 Monate"),
+      h("div", { style: { height: 160 } },
+        h(ResponsiveContainer, { width: "100%", height: "100%" },
+          h(AreaChart, { data: last12, margin: { top: 5, right: 10, left: -15, bottom: 0 } },
+            h("defs", null,
+              h("linearGradient", { id: "grad", x1: "0", y1: "0", x2: "0", y2: "1" },
+                h("stop", { offset: "0%", stopColor: c.accent, stopOpacity: 0.35 }),
+                h("stop", { offset: "100%", stopColor: c.accent, stopOpacity: 0.02 })
+              )
+            ),
+            h(CartesianGrid, { strokeDasharray: "3 3", stroke: c.border }),
+            h(XAxis, { dataKey: "label", stroke: c.inkSoft, fontSize: 11, interval: 1 }),
+            h(YAxis, { stroke: c.inkSoft, fontSize: 11, tickFormatter: (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v }),
+            h(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { background: c.surface, border: `1px solid ${c.border}`, borderRadius: 8, fontSize: 12 } }),
+            h(Area, { type: "monotone", dataKey: "sum", stroke: c.accent, strokeWidth: 2, fill: "url(#grad)", dot: { fill: c.accent, r: 2.5 } })
+          )
+        )
+      )
+    ),
+    byUser.some((u) => u.sum > 0) && h("div", { style: { ...st.card, padding: 18 } },
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: c.ink, fontStyle: "italic", marginBottom: 14 } }, "Ausgelegt von"),
+      h("div", { style: { height: 130 } },
+        h(ResponsiveContainer, { width: "100%", height: "100%" },
+          h(BarChart, { data: byUser, margin: { top: 5, right: 10, left: -15, bottom: 0 } },
+            h(CartesianGrid, { strokeDasharray: "3 3", stroke: c.border }),
+            h(XAxis, { dataKey: "name", stroke: c.inkSoft, fontSize: 11 }),
+            h(YAxis, { stroke: c.inkSoft, fontSize: 11, tickFormatter: (v) => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v }),
+            h(Tooltip, { formatter: (v) => fmtEUR(v), contentStyle: { background: c.surface, border: `1px solid ${c.border}`, borderRadius: 8, fontSize: 12 } }),
+            h(Bar, { dataKey: "sum", fill: c.forest, radius: [5, 5, 0, 0] })
+          )
+        )
+      )
+    )
+  );
+}
+
+// ============================================================
+// SETTINGS
+// ============================================================
+function SettingsView({ ctx }) {
+  const { categories, budgets, users, expenses, tasks, shopping, recurring, settlements, p, showToast } = ctx;
+  const [section, setSection] = useState("categories");
+
+  const exportJSON = () => {
+    const data = { expenses, tasks, shopping, categories, budgets, recurring, settlements, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `haushalt-${today()}.json`; a.click();
+    URL.revokeObjectURL(url);
+    showToast("Backup heruntergeladen", "success");
+  };
+
+  return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
+    h(PageTitle, { title: "Einstellungen" }),
+    h("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 } },
+      [
+        { id: "categories", label: "Kategorien & Budgets" },
+        { id: "users", label: "Personen" },
+        { id: "data", label: "Daten exportieren" },
+      ].map((s) =>
+        h("button", { key: s.id, onClick: () => setSection(section === s.id ? null : s.id),
+          style: { ...st.row, justifyContent: "space-between", padding: "14px 16px", background: section === s.id ? c.surfaceAlt : c.surface }
+        },
+          h("span", { style: { fontWeight: 500, color: c.ink, fontSize: 14.5 } }, s.label),
+          h("span", { style: { transform: section === s.id ? "rotate(180deg)" : "none", transition: "0.2s", display: "inline-flex" } },
+            I.ChevDown({ size: 15, color: c.inkFaint })
+          )
+        )
+      )
+    ),
+    section === "categories" && h(CategoryEditor, { categories, setCategories: p.categories, budgets, setBudgets: p.budgets, showToast }),
+    section === "users" && h(UserEditor, { users, setUsers: p.users, showToast }),
+    section === "data" && h("div", null,
+      h("div", { style: { fontSize: 15, color: c.inkSoft, marginBottom: 14, lineHeight: 1.6, fontStyle: "italic", fontFamily: "'Cormorant Garamond', serif" } },
+        "Sicherheitskopie aller Daten als JSON-Datei herunterladen."
+      ),
+      h("button", { onClick: exportJSON, style: { ...st.row, justifyContent: "space-between", padding: "14px 16px", width: "100%" } },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 12 } },
+          I.Cloud({ size: 18, color: c.forest }),
+          h("div", { style: { textAlign: "left" } },
+            h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 15 } }, "Backup herunterladen"),
+            h("div", { style: { fontSize: 12, color: c.inkSoft, marginTop: 1 } }, "JSON-Datei mit allen Daten")
+          )
+        ),
+        I.Arrow({ size: 16, color: c.inkSoft })
+      ),
+      h("div", { style: { marginTop: 20, padding: 14, background: c.surfaceAlt, borderRadius: 12, fontSize: 12, color: c.inkSoft, lineHeight: 1.6 } },
+        h("strong", { style: { color: c.ink, fontWeight: 500 } }, "Übersicht:"), h("br"),
+        `${expenses.length} Ausgaben · ${tasks.length} Aufgaben · ${shopping.length} Einkaufs-Einträge`, h("br"),
+        `${categories.length} Kategorien · ${recurring.length} Vorlagen · ${settlements.length} Ausgleiche`
+      )
+    )
+  );
+}
+
+function CategoryEditor({ categories, setCategories, budgets, setBudgets, showToast }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [editing, setEditing] = useState(null);
+
+  return h("div", null,
+    h("div", { style: { fontSize: 15, color: c.inkSoft, marginBottom: 14, lineHeight: 1.6, fontStyle: "italic", fontFamily: "'Cormorant Garamond', serif" } },
+      "Monatsbudgets erscheinen als Fortschrittsbalken im Dashboard."
+    ),
+    h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+      categories.map((cat) =>
+        h("div", { key: cat.name, style: { ...st.row, padding: "12px 14px" } },
+          h("div", { style: { width: 34, height: 34, borderRadius: 9, background: `${cat.color}18`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 } }, cat.icon),
+          h("div", { style: { flex: 1, marginLeft: 12, minWidth: 0 } },
+            h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14 } }, cat.name),
+            h("div", { style: { fontSize: 11.5, color: c.inkSoft, marginTop: 1 } },
+              `Budget: ${budgets[cat.name] ? fmtEUR(budgets[cat.name]) : "—"}`
+            )
+          ),
+          h("button", { onClick: () => setEditing(cat), style: st.miniBtn }, I.Edit({ size: 12, color: c.inkSoft })),
+          h("button", { onClick: async () => {
+            if (!confirm(`Kategorie "${cat.name}" entfernen?`)) return;
+            await setCategories(categories.filter((x) => x.name !== cat.name));
+            const { [cat.name]: _, ...rest } = budgets;
+            await setBudgets(rest);
+            showToast("Entfernt");
+          }, style: st.miniBtn }, I.Trash({ size: 12, color: c.inkSoft }))
+        )
+      )
+    ),
+    h("button", { onClick: () => setShowAdd(true), style: { ...st.primaryBtn, marginTop: 14 } },
+      I.Plus({ size: 15, strokeWidth: 2, color: c.surface }), " Kategorie hinzufügen"
+    ),
+    editing && h(CategoryForm, { editing, budgetValue: budgets[editing.name], onClose: () => setEditing(null),
+      onSave: async (updated, budget) => {
+        const newCats = categories.map((cat) => cat.name === editing.name ? updated : cat);
+        await setCategories(newCats);
+        const newBudgets = { ...budgets };
+        if (editing.name !== updated.name) delete newBudgets[editing.name];
+        if (budget > 0) newBudgets[updated.name] = budget;
+        else delete newBudgets[updated.name];
+        await setBudgets(newBudgets);
+        setEditing(null);
+        showToast("Gespeichert", "success");
+      }
+    }),
+    showAdd && h(CategoryForm, { editing: null, onClose: () => setShowAdd(false),
+      onSave: async (cat, budget) => {
+        await setCategories([...categories, cat]);
+        if (budget > 0) await setBudgets({ ...budgets, [cat.name]: budget });
+        setShowAdd(false);
+        showToast("Angelegt", "success");
+      }
+    })
+  );
+}
+
+function CategoryForm({ editing, budgetValue, onClose, onSave }) {
+  const [name, setName] = useState(editing?.name || "");
+  const [icon, setIcon] = useState(editing?.icon || "•");
+  const [color, setColor] = useState(editing?.color || c.accent);
+  const [budget, setBudget] = useState(budgetValue ? String(budgetValue) : "");
+  const colors = [c.accent, c.forest, c.ochre, "#7BA098", "#D89A8A", "#A0522D", "#6B8E7F", "#9B8AA0", "#8B7355", "#B0826B"];
+
+  return h(Modal, { onClose, title: editing ? "Bearbeiten" : "Neue Kategorie" },
+    h(Field, { label: "Name" }, h("input", { value: name, onChange: (e) => setName(e.target.value), style: st.input, placeholder: "z. B. Tierbedarf", autoFocus: true })),
+    h(Field, { label: "Symbol (Emoji)" }, h("input", { value: icon, onChange: (e) => setIcon(e.target.value), style: { ...st.input, fontSize: 22, textAlign: "center" }, maxLength: 2 })),
+    h(Field, { label: "Farbe" },
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 } },
+        colors.map((col) =>
+          h("button", { key: col, onClick: () => setColor(col), style: { width: 34, height: 34, borderRadius: 10, background: col, border: color === col ? `2.5px solid ${c.ink}` : "none" } })
+        )
+      )
+    ),
+    h(Field, { label: "Monatsbudget (optional)" },
+      h("input", { inputMode: "decimal", value: budget, onChange: (e) => setBudget(e.target.value), style: st.input, placeholder: "0,00 €" })
+    ),
+    h("button", { onClick: () => {
+      if (!name.trim()) return;
+      onSave({ name: name.trim(), icon: icon || "•", color }, parseFloat(budget.replace(",", ".")) || 0);
+    }, style: st.primaryBtn }, "Speichern")
+  );
+}
+
+function UserEditor({ users, setUsers, showToast }) {
+  const [draft, setDraft] = useState(users);
+  return h("div", null,
+    h("div", { style: { fontSize: 15, color: c.inkSoft, marginBottom: 14, lineHeight: 1.6, fontStyle: "italic", fontFamily: "'Cormorant Garamond', serif" } },
+      "Namen anpassen. Bestehende Einträge werden nicht automatisch umbenannt."
+    ),
+    h("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+      draft.map((name, i) =>
+        h(Field, { key: i, label: `Person ${i + 1}` },
+          h("input", { value: name, onChange: (e) => { const x = [...draft]; x[i] = e.target.value; setDraft(x); }, style: st.input })
+        )
+      )
+    ),
+    h("button", { onClick: async () => {
+      const cl = draft.map((d) => d.trim()).filter(Boolean);
+      if (cl.length === 2) { await setUsers(cl); showToast("Aktualisiert", "success"); }
+    }, style: { ...st.primaryBtn, marginTop: 14 } }, "Speichern")
+  );
+}
+
+// ============================================================
+// UTILITY COMPONENTS
+// ============================================================
+function PageTitle({ title, subtitle, right }) {
+  return h("div", { style: { marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 } },
+    h("div", { style: { minWidth: 0 } },
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 32, fontWeight: 500, color: c.ink, letterSpacing: -0.7, lineHeight: 1.05 } }, title),
+      subtitle && h("div", { style: { fontSize: 15, color: c.inkSoft, marginTop: 4, fontFamily: "'Cormorant Garamond', serif", fontStyle: "italic" } }, subtitle)
+    ),
+    right
+  );
+}
+
+function Modal({ title, onClose, children }) {
+  return h("div", { style: st.modalBg, onClick: onClose },
+    h("div", { style: st.modalCard, onClick: (e) => e.stopPropagation(), className: "slideUp" },
+      h("div", { style: { width: 32, height: 3, background: c.borderStrong, borderRadius: 2, margin: "0 auto 18px" } }),
+      h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 22 } },
+        h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 26, fontWeight: 500, color: c.ink, letterSpacing: -0.5 } }, title),
+        h("button", { onClick: onClose, style: st.iconBtn, "aria-label": "Schließen" }, I.X({ size: 16, color: c.inkSoft }))
+      ),
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 14 } }, children)
+    )
+  );
+}
+
+function Field({ label, children }) {
+  return h("div", null,
+    h("div", { style: { ...st.eyebrow, marginBottom: 7 } }, label),
+    children
+  );
+}
+
+function FAB({ onClick }) {
+  return h("button", { onClick, style: st.fab, "aria-label": "Hinzufügen" },
+    I.Plus({ size: 22, color: c.surface, strokeWidth: 2 })
+  );
+}
+
+function BottomNav({ tab, setTab }) {
+  const items = [
+    { id: "home", label: "Start", icon: I.Home },
+    { id: "expenses", label: "Geld", icon: I.Receipt },
+    { id: "tasks", label: "Tasks", icon: I.ListChecks },
+    { id: "shopping", label: "Einkauf", icon: I.ShoppingBasket },
+    { id: "stats", label: "Stats", icon: I.BarChart },
+  ];
+  return h("div", { style: st.bottomNav },
+    items.map((i) => {
+      const active = tab === i.id;
+      return h("button", { key: i.id, onClick: () => setTab(i.id),
+        style: { ...st.navBtn, color: active ? c.ink : c.inkFaint }
+      },
+        i.icon({ size: 19, strokeWidth: active ? 2 : 1.5, color: active ? c.ink : c.inkFaint }),
+        h("span", { style: { fontSize: 10, marginTop: 4, fontWeight: active ? 500 : 400, letterSpacing: 0.3 } }, i.label),
+        active && h("div", { style: { position: "absolute", top: -1, width: 18, height: 2, background: c.accent, borderRadius: 999 } })
+      );
+    })
+  );
+}
+
+function Toast({ msg, kind }) {
+  const bg = kind === "success" ? c.success : kind === "error" ? c.warn : c.ink;
+  return h("div", {
+    style: {
+      position: "fixed", bottom: 100, left: "50%", transform: "translateX(-50%)",
+      background: bg, color: c.surface, padding: "10px 18px", borderRadius: 999,
+      fontSize: 13, fontWeight: 500, zIndex: 100,
+      boxShadow: "0 8px 24px rgba(0,0,0,0.18)",
+      animation: "toastIn 0.25s ease-out", maxWidth: "85%"
+    }
+  }, msg);
+}
+
+// ============================================================
+// STYLES
+// ============================================================
+const st = {
+  app: {
+    minHeight: "100vh", maxWidth: 480, margin: "0 auto",
+    background: c.bg, color: c.ink, fontFamily: "'Inter', sans-serif",
+    display: "flex", flexDirection: "column", position: "relative",
+    paddingBottom: 76,
+  },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "18px 20px 6px" },
+  content: { padding: "10px 20px 16px", flex: 1 },
+  card: { background: c.surface, borderRadius: 14, padding: 16, border: `1px solid ${c.border}` },
+  cardLg: { background: c.surface, borderRadius: 18, padding: 22, border: `1px solid ${c.border}` },
+  row: { display: "flex", alignItems: "center", background: c.surface, borderRadius: 12, padding: "11px 14px", border: `1px solid ${c.border}`, gap: 4 },
+  input: { width: "100%", padding: "11px 13px", fontSize: 14.5, border: `1px solid ${c.border}`, borderRadius: 10, background: c.surface, color: c.ink, minHeight: 44, fontFamily: "'Inter', sans-serif" },
+  primaryBtn: { width: "100%", padding: "13px 18px", background: c.ink, color: c.surface, border: "none", borderRadius: 12, fontSize: 14.5, fontWeight: 500, letterSpacing: 0.2, marginTop: 4, minHeight: 46, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6 },
+  pillBtn: { background: "rgba(255,255,255,0.12)", color: c.surface, border: "none", padding: "6px 14px", borderRadius: 999, fontSize: 11.5, fontWeight: 500, letterSpacing: 0.3, backdropFilter: "blur(8px)" },
+  textBtn: { background: "transparent", border: "none", color: c.inkSoft, fontSize: 12.5, fontWeight: 500, padding: "4px 6px" },
+  smallBtn: { padding: "7px 11px", fontSize: 12, border: `1px solid ${c.border}`, background: c.surface, borderRadius: 8, fontWeight: 500, color: c.ink, display: "inline-flex", alignItems: "center", gap: 5 },
+  userPick: { width: "100%", padding: "16px 20px", borderRadius: 14, background: c.surface, border: `1px solid ${c.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", minHeight: 72 },
+  avatar: { width: 40, height: 40, borderRadius: 12, background: c.surfaceAlt, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: c.forest },
+  iconBtn: { width: 36, height: 36, borderRadius: 10, background: c.surface, border: `1px solid ${c.border}`, display: "flex", alignItems: "center", justifyContent: "center" },
+  miniBtn: { width: 30, height: 30, border: "none", background: "transparent", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  chip: { padding: "7px 12px", fontSize: 12.5, borderRadius: 999, fontWeight: 500, background: c.surface, color: c.ink, border: `1px solid ${c.border}` },
+  chipActive: { background: c.ink, color: c.surface, borderColor: c.ink },
+  badge: { fontSize: 9.5, padding: "2px 6px", borderRadius: 4, fontWeight: 600, letterSpacing: 0.4, textTransform: "uppercase", background: c.surfaceAlt, color: c.inkSoft },
+  dot: { width: 6, height: 6, borderRadius: "50%", display: "inline-block" },
+  eyebrow: { fontSize: 10, color: c.inkFaint, letterSpacing: 1.8, textTransform: "uppercase", fontWeight: 500 },
+  segmented: { display: "flex", background: c.surfaceAlt, borderRadius: 999, padding: 3, gap: 2 },
+  segmentedBtn: { flex: 1, padding: "8px 12px", border: "none", borderRadius: 999, fontSize: 12.5, transition: "all 0.2s" },
+  checkbox: { width: 22, height: 22, borderRadius: 7, border: `2px solid ${c.borderStrong}`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "transparent", transition: "all 0.15s" },
+  toggle: { width: 36, height: 20, borderRadius: 999, position: "relative", transition: "background 0.2s" },
+  toggleDot: { position: "absolute", top: 2, width: 16, height: 16, borderRadius: "50%", background: "#fff", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.2)" },
+  progressTrack: { width: "100%", height: 5, background: c.surfaceAlt, borderRadius: 999, overflow: "hidden" },
+  progressFill: { height: 5, borderRadius: 999, transition: "width 0.5s ease" },
+  modalBg: { position: "fixed", inset: 0, background: "rgba(26,29,27,0.4)", backdropFilter: "blur(6px)", zIndex: 50, display: "flex", alignItems: "flex-end", justifyContent: "center" },
+  modalCard: { width: "100%", maxWidth: 480, background: c.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: "14px 22px 30px", maxHeight: "92vh", overflowY: "auto" },
+  fab: { position: "fixed", bottom: 90, right: "max(20px, calc((100vw - 480px) / 2 + 20px))", width: 52, height: 52, borderRadius: 16, background: c.ink, border: "none", boxShadow: "0 8px 24px rgba(26,29,27,0.25)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20 },
+  bottomNav: { position: "fixed", bottom: 0, left: 0, right: 0, maxWidth: 480, margin: "0 auto", background: c.surface, borderTop: `1px solid ${c.border}`, display: "flex", justifyContent: "space-around", padding: "8px 4px calc(8px + env(safe-area-inset-bottom))", zIndex: 10 },
+  navBtn: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", background: "transparent", border: "none", padding: "6px 4px", position: "relative" },
+  pinBtn: { width: 72, height: 72, borderRadius: 18, border: `1px solid ${c.border}`, background: c.surface, fontSize: 24, fontFamily: "'Cormorant Garamond', serif", fontWeight: 500, color: c.ink },
+};
+
+// ============================================================
+// MOUNT
+// ============================================================
+const root = createRoot(document.getElementById("root"));
+root.render(h(App));
+</script>
+</body>
+</html>
