@@ -137,20 +137,16 @@ const CATEGORY_DEFAULTS = [
   { name: "Sonstiges", color: "#8B7D6B", icon: "•" },
 ];
 
-// Einkaufs-Kategorien in typischer Laden-Reihenfolge (Rundgang durch den Supermarkt)
-const SHOP_CATEGORIES = [
-  { id: "obst", name: "Obst & Gemüse", icon: "🥬", order: 1 },
-  { id: "backwaren", name: "Brot & Backwaren", icon: "🥖", order: 2 },
-  { id: "kuehl", name: "Kühlregal", icon: "🧀", order: 3 },
-  { id: "fleisch", name: "Fleisch & Fisch", icon: "🥩", order: 4 },
-  { id: "tiefkuehl", name: "Tiefkühl", icon: "🧊", order: 5 },
-  { id: "trocken", name: "Vorrat & Trocken", icon: "🍝", order: 6 },
-  { id: "getraenke", name: "Getränke", icon: "🥤", order: 7 },
-  { id: "suess", name: "Süßes & Snacks", icon: "🍫", order: 8 },
-  { id: "drogerie", name: "Drogerie & Haushalt", icon: "🧴", order: 9 },
-  { id: "sonstiges", name: "Sonstiges", icon: "🛒", order: 99 },
+// Einkaufs-Läden (Geschäfte) — Standardwerte, erweiterbar durch die Nutzer
+const SHOP_STORE_DEFAULTS = [
+  { id: "edeka", name: "Edeka", icon: "🛒" },
+  { id: "dm", name: "dm", icon: "🧴" },
+  { id: "rossmann", name: "Rossmann", icon: "🧼" },
+  { id: "aldi", name: "Aldi", icon: "🏪" },
+  { id: "lidl", name: "Lidl", icon: "🛍️" },
+  { id: "baumarkt", name: "Baumarkt", icon: "🔧" },
+  { id: "sonstiges", name: "Sonstiges", icon: "📦" },
 ];
-const shopCat = (id) => SHOP_CATEGORIES.find((s) => s.id === id) || SHOP_CATEGORIES[SHOP_CATEGORIES.length - 1];
 
 // ============================================================
 // UTILITIES
@@ -248,6 +244,7 @@ function App() {
   const [events, setEvents] = useState([]);
   const [folders, setFolders] = useState([]);
   const [notes, setNotes] = useState([]);
+  const [shopStores, setShopStores] = useState(SHOP_STORE_DEFAULTS);
 
   const [toast, setToast] = useState(null);
   const showToast = (msg, kind = "info") => {
@@ -279,6 +276,7 @@ function App() {
       cloudGet("events", [], setEvents),
       cloudGet("folders", [], setFolders),
       cloudGet("notes", [], setNotes),
+      cloudGet("shopStores", SHOP_STORE_DEFAULTS, setShopStores),
     ];
     setLoading(false);
     return () => unsubs.forEach((u) => u && u());
@@ -323,6 +321,7 @@ function App() {
     events: (n) => cloudSet("events", n),
     folders: (n) => cloudSet("folders", n),
     notes: (n) => cloudSet("notes", n),
+    shopStores: (n) => cloudSet("shopStores", n),
     pin: (n) => cloudSet("pin", n),
   };
 
@@ -360,7 +359,7 @@ function App() {
 
   const ctx = {
     currentUser, users, expenses, tasks, shopping, categories, budgets, recurring, settlements,
-    events, folders, notes, pin,
+    events, folders, notes, pin, shopStores,
     p, showToast, setTab,
   };
 
@@ -1670,12 +1669,19 @@ function SwipeRow({ children, onSwipeRight, onSwipeLeft, rightLabel, leftLabel, 
 }
 
 function Shopping({ ctx }) {
-  const { currentUser, shopping, p, showToast } = ctx;
+  const { currentUser, shopping, shopStores, p, showToast } = ctx;
   const [input, setInput] = useState("");
   const [qty, setQty] = useState("");
-  const [cat, setCat] = useState("sonstiges");
-  const [groupByCat, setGroupByCat] = useState(true);
-  const [showCatPicker, setShowCatPicker] = useState(false);
+  const [store, setStore] = useState(null); // gewählter Laden für neuen Artikel
+  const [groupByStore, setGroupByStore] = useState(true);
+  const [showStorePicker, setShowStorePicker] = useState(false);
+  const [newStoreName, setNewStoreName] = useState("");
+
+  // Liste der Läden (Fallback auf Defaults wenn noch nichts geladen)
+  const stores = (shopStores && shopStores.length > 0) ? shopStores : SHOP_STORE_DEFAULTS;
+  const findStore = (id) => stores.find((s) => s.id === id) || stores.find((s) => s.id === "sonstiges") || stores[stores.length - 1];
+  // Aktuell gewählter Laden (Default: erster Laden)
+  const activeStore = store || stores[0]?.id;
 
   const open = shopping.filter((s) => !s.bought);
   const bought = shopping.filter((s) => s.bought);
@@ -1683,7 +1689,7 @@ function Shopping({ ctx }) {
   const add = async () => {
     const v = input.trim();
     if (!v) return;
-    await p.shopping([...shopping, { id: uid(), item: v, qty: qty.trim() || null, category: cat, addedBy: currentUser, bought: false, urgent: false, addedAt: today() }]);
+    await p.shopping([...shopping, { id: uid(), item: v, qty: qty.trim() || null, store: activeStore, addedBy: currentUser, bought: false, urgent: false, addedAt: today() }]);
     setInput(""); setQty("");
   };
 
@@ -1697,10 +1703,6 @@ function Shopping({ ctx }) {
     await p.shopping(shopping.map((s) => s.id === id ? { ...s, urgent: !s.urgent } : s));
   };
 
-  const setItemCat = async (id, catId) => {
-    await p.shopping(shopping.map((s) => s.id === id ? { ...s, category: catId } : s));
-  };
-
   const remove = async (id) => { await p.shopping(shopping.filter((s) => s.id !== id)); };
 
   const clearBought = async () => {
@@ -1709,18 +1711,31 @@ function Shopping({ ctx }) {
     showToast("Aufgeräumt");
   };
 
-  // Offene Items nach Kategorie gruppieren (in Laden-Reihenfolge)
+  // Neuen Laden anlegen
+  const addStore = async () => {
+    const name = newStoreName.trim();
+    if (!name) return;
+    const id = "store_" + uid();
+    const next = [...stores.filter((s) => s.id !== "sonstiges"), { id, name, icon: "🏬" }, ...stores.filter((s) => s.id === "sonstiges")];
+    await p.shopStores(next);
+    setStore(id);
+    setNewStoreName("");
+    showToast(`"${name}" hinzugefügt`, "success");
+  };
+
+  // Offene Items nach Laden gruppieren
   const grouped = useMemo(() => {
     const map = {};
     open.forEach((s) => {
-      const cid = s.category || "sonstiges";
-      if (!map[cid]) map[cid] = [];
-      map[cid].push(s);
+      const sid = s.store || (stores[0]?.id);
+      if (!map[sid]) map[sid] = [];
+      map[sid].push(s);
     });
-    return Object.entries(map)
-      .map(([cid, items]) => ({ cat: shopCat(cid), items: items.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0)) }))
-      .sort((a, b) => a.cat.order - b.cat.order);
-  }, [open]);
+    // Reihenfolge: nach Position in stores-Liste
+    return stores
+      .map((st) => ({ store: st, items: (map[st.id] || []).sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0)) }))
+      .filter((g) => g.items.length > 0);
+  }, [open, stores]);
 
   // Eine offene Zeile rendern (mit Wisch-Geste)
   const renderOpenRow = (s) => h(SwipeRow, {
@@ -1754,8 +1769,8 @@ function Shopping({ ctx }) {
 
   return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
     h(PageTitle, { title: "Einkaufen", subtitle: "Was fehlt zuhause",
-      right: open.length > 0 && h("button", { onClick: () => setGroupByCat(!groupByCat), style: st.iconBtn, "aria-label": "Sortierung" },
-        groupByCat ? I.List({ color: c.inkSoft, size: 17 }) : I.Grid({ color: c.inkSoft, size: 17 })
+      right: open.length > 0 && h("button", { onClick: () => setGroupByStore(!groupByStore), style: st.iconBtn, "aria-label": "Sortierung" },
+        groupByStore ? I.List({ color: c.inkSoft, size: 17 }) : I.Grid({ color: c.inkSoft, size: 17 })
       )
     }),
     // Eingabe
@@ -1764,31 +1779,42 @@ function Shopping({ ctx }) {
       h("input", { value: qty, onChange: (e) => setQty(e.target.value), onKeyDown: (e) => e.key === "Enter" && add(), style: { ...st.input, width: 64, textAlign: "center" }, placeholder: "Menge" }),
       h("button", { onClick: add, style: { ...st.primaryBtn, padding: "0 16px", width: "auto", margin: 0, minHeight: 44, height: 44 } }, I.Plus({ size: 17, strokeWidth: 2, color: c.surface }))
     ),
-    // Kategorie-Auswahl für neuen Artikel
-    h("button", { onClick: () => setShowCatPicker(!showCatPicker),
-      style: { ...st.row, padding: "8px 12px", marginBottom: 16, width: "100%", justifyContent: "space-between" }
+    // Laden-Auswahl für neuen Artikel
+    h("button", { onClick: () => setShowStorePicker(!showStorePicker),
+      style: { ...st.row, padding: "8px 12px", marginBottom: showStorePicker ? 8 : 16, width: "100%", justifyContent: "space-between" }
     },
       h("span", { style: { fontSize: 13, color: c.inkSoft, display: "flex", alignItems: "center", gap: 8 } },
-        h("span", { style: { fontSize: 15 } }, shopCat(cat).icon),
-        h("span", null, shopCat(cat).name)
+        h("span", { style: { fontSize: 15 } }, findStore(activeStore).icon),
+        h("span", null, findStore(activeStore).name)
       ),
-      h("span", { style: { fontSize: 11, color: c.inkFaint } }, "ändern")
+      h("span", { style: { fontSize: 11, color: c.inkFaint } }, "Laden wählen")
     ),
-    showCatPicker && h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16, marginTop: -8 } },
-      SHOP_CATEGORIES.map((sc) =>
-        h("button", { key: sc.id, onClick: () => { setCat(sc.id); setShowCatPicker(false); },
-          style: { ...st.chip, ...(cat === sc.id ? st.chipActive : {}), display: "flex", alignItems: "center", gap: 5 }
-        }, h("span", null, sc.icon), h("span", null, sc.name))
+    showStorePicker && h("div", { style: { marginBottom: 16 } },
+      h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 } },
+        stores.map((sc) =>
+          h("button", { key: sc.id, onClick: () => { setStore(sc.id); setShowStorePicker(false); },
+            style: { ...st.chip, ...(activeStore === sc.id ? st.chipActive : {}), display: "flex", alignItems: "center", gap: 5 }
+          }, h("span", null, sc.icon), h("span", null, sc.name))
+        )
+      ),
+      // Neuer Laden anlegen
+      h("div", { style: { display: "flex", gap: 8 } },
+        h("input", { value: newStoreName, onChange: (e) => setNewStoreName(e.target.value),
+          onKeyDown: (e) => e.key === "Enter" && addStore(),
+          style: { ...st.input, flex: 1, fontSize: 13 }, placeholder: "Neuer Laden (z. B. Müller)…" }),
+        h("button", { onClick: addStore, style: { ...st.primaryBtn, padding: "0 14px", width: "auto", margin: 0, minHeight: 40, height: 40 } },
+          I.Plus({ size: 15, strokeWidth: 2, color: c.surface })
+        )
       )
     ),
 
     open.length === 0 && bought.length === 0 && h(Empty, { text: "Liste ist leer" }),
 
     // OFFENE Artikel
-    open.length > 0 && (groupByCat
+    open.length > 0 && (groupByStore
       ? h("div", null,
           h("div", { style: { ...st.eyebrow, marginBottom: 10 } }, `Offen · ${open.length}`),
-          grouped.map(({ cat: sc, items }) =>
+          grouped.map(({ store: sc, items }) =>
             h("div", { key: sc.id, style: { marginBottom: 16 } },
               h("div", { style: { display: "flex", alignItems: "center", gap: 7, marginBottom: 7, paddingLeft: 2 } },
                 h("span", { style: { fontSize: 15 } }, sc.icon),
