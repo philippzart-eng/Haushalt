@@ -137,6 +137,21 @@ const CATEGORY_DEFAULTS = [
   { name: "Sonstiges", color: "#8B7D6B", icon: "•" },
 ];
 
+// Einkaufs-Kategorien in typischer Laden-Reihenfolge (Rundgang durch den Supermarkt)
+const SHOP_CATEGORIES = [
+  { id: "obst", name: "Obst & Gemüse", icon: "🥬", order: 1 },
+  { id: "backwaren", name: "Brot & Backwaren", icon: "🥖", order: 2 },
+  { id: "kuehl", name: "Kühlregal", icon: "🧀", order: 3 },
+  { id: "fleisch", name: "Fleisch & Fisch", icon: "🥩", order: 4 },
+  { id: "tiefkuehl", name: "Tiefkühl", icon: "🧊", order: 5 },
+  { id: "trocken", name: "Vorrat & Trocken", icon: "🍝", order: 6 },
+  { id: "getraenke", name: "Getränke", icon: "🥤", order: 7 },
+  { id: "suess", name: "Süßes & Snacks", icon: "🍫", order: 8 },
+  { id: "drogerie", name: "Drogerie & Haushalt", icon: "🧴", order: 9 },
+  { id: "sonstiges", name: "Sonstiges", icon: "🛒", order: 99 },
+];
+const shopCat = (id) => SHOP_CATEGORIES.find((s) => s.id === id) || SHOP_CATEGORIES[SHOP_CATEGORIES.length - 1];
+
 // ============================================================
 // UTILITIES
 // ============================================================
@@ -287,6 +302,8 @@ function App() {
           return { ...r, lastGenerated: mine[mine.length - 1].date };
         });
         cloudSet("recurring", updatedRec);
+        const total = added.reduce((s, e) => s + e.amount, 0);
+        showToast(`${added.length} Fixkosten gebucht · ${fmtEURc(total)}`, "success");
       }
     });
     rotateRecurringTasks(tasks, users).then((changed) => {
@@ -1419,7 +1436,17 @@ function Tasks({ ctx }) {
       ? h("div", { style: { marginTop: 16 } }, h(Empty, { text: filter === "done" ? "Noch nichts erledigt" : "Alles geschafft ✿" }))
       : h("div", { style: { display: "flex", flexDirection: "column", gap: 8, marginTop: 16 } },
           visible.map((t) =>
-            h(TaskRow, { key: t.id, task: t, onToggle: () => toggle(t.id), onEdit: () => { setEditing(t); setShowForm(true); }, onDelete: () => remove(t.id) })
+            h(SwipeRow, {
+              key: t.id,
+              onSwipeRight: () => toggle(t.id),
+              onSwipeLeft: () => remove(t.id),
+              rightLabel: t.completed ? "Zurück" : "✓ Erledigt",
+              leftLabel: "Löschen",
+              rightColor: c.success,
+              leftColor: c.warn,
+            },
+              h(TaskRow, { task: t, onToggle: () => toggle(t.id), onEdit: () => { setEditing(t); setShowForm(true); }, onDelete: () => remove(t.id) })
+            )
           )
         ),
     h(FAB, { onClick: () => { setEditing(null); setShowForm(true); } }),
@@ -1562,10 +1589,93 @@ function TaskForm({ users, currentUser, editing, onClose, onSave }) {
 // ============================================================
 // SHOPPING
 // ============================================================
+
+// Wiederverwendbare Zeile mit Wisch-Geste:
+// nach rechts wischen = primäre Aktion (z.B. erledigen), nach links = löschen
+function SwipeRow({ children, onSwipeRight, onSwipeLeft, rightLabel, leftLabel, rightColor, leftColor, style }) {
+  const [dx, setDx] = useState(0);
+  const [swiping, setSwiping] = useState(false);
+  const startX = useRef(0);
+  const startY = useRef(0);
+  const locked = useRef(null); // "h" horizontal | "v" vertical
+
+  const THRESHOLD = 70;
+
+  const onStart = (clientX, clientY) => {
+    startX.current = clientX;
+    startY.current = clientY;
+    locked.current = null;
+    setSwiping(true);
+  };
+  const onMove = (clientX, clientY, e) => {
+    if (!swiping) return;
+    const diffX = clientX - startX.current;
+    const diffY = clientY - startY.current;
+    if (locked.current === null) {
+      if (Math.abs(diffX) > 8 || Math.abs(diffY) > 8) {
+        locked.current = Math.abs(diffX) > Math.abs(diffY) ? "h" : "v";
+      }
+    }
+    if (locked.current === "h") {
+      if (e && e.cancelable) e.preventDefault();
+      // Nur erlaubte Richtungen zulassen
+      let d = diffX;
+      if (d > 0 && !onSwipeRight) d = 0;
+      if (d < 0 && !onSwipeLeft) d = 0;
+      setDx(Math.max(-140, Math.min(140, d)));
+    }
+  };
+  const onEnd = () => {
+    if (dx > THRESHOLD && onSwipeRight) onSwipeRight();
+    else if (dx < -THRESHOLD && onSwipeLeft) onSwipeLeft();
+    setDx(0);
+    setSwiping(false);
+    locked.current = null;
+  };
+
+  const revealRight = dx > 0; // wischt nach rechts → linke Aktionsfläche (primär) sichtbar
+  const active = Math.abs(dx) > THRESHOLD;
+
+  return h("div", { style: { position: "relative", borderRadius: 12, overflow: "hidden", ...style } },
+    // Hintergrund-Aktionsflächen
+    h("div", { style: {
+      position: "absolute", inset: 0, display: "flex",
+      alignItems: "center",
+      justifyContent: revealRight ? "flex-start" : "flex-end",
+      paddingLeft: 18, paddingRight: 18,
+      background: revealRight ? (rightColor || c.success) : (leftColor || c.warn),
+      color: "#fff", fontSize: 13, fontWeight: 600, letterSpacing: 0.3,
+    }},
+      h("span", { style: { opacity: active ? 1 : 0.6, transition: "opacity 0.1s" } },
+        revealRight ? (rightLabel || "Erledigt") : (leftLabel || "Löschen")
+      )
+    ),
+    // Vordergrund (eigentliche Zeile)
+    h("div", {
+      style: {
+        transform: `translateX(${dx}px)`,
+        transition: swiping ? "none" : "transform 0.22s cubic-bezier(0.2,0.8,0.2,1)",
+        touchAction: "pan-y",
+        position: "relative",
+      },
+      onTouchStart: (e) => onStart(e.touches[0].clientX, e.touches[0].clientY),
+      onTouchMove: (e) => onMove(e.touches[0].clientX, e.touches[0].clientY, e),
+      onTouchEnd: onEnd,
+      onMouseDown: (e) => onStart(e.clientX, e.clientY),
+      onMouseMove: (e) => swiping && onMove(e.clientX, e.clientY, e),
+      onMouseUp: onEnd,
+      onMouseLeave: () => swiping && onEnd(),
+    }, children)
+  );
+}
+
 function Shopping({ ctx }) {
   const { currentUser, shopping, p, showToast } = ctx;
   const [input, setInput] = useState("");
   const [qty, setQty] = useState("");
+  const [cat, setCat] = useState("sonstiges");
+  const [groupByCat, setGroupByCat] = useState(true);
+  const [showCatPicker, setShowCatPicker] = useState(false);
 
   const open = shopping.filter((s) => !s.bought);
   const bought = shopping.filter((s) => s.bought);
@@ -1573,7 +1683,7 @@ function Shopping({ ctx }) {
   const add = async () => {
     const v = input.trim();
     if (!v) return;
-    await p.shopping([...shopping, { id: uid(), item: v, qty: qty.trim() || null, addedBy: currentUser, bought: false, urgent: false, addedAt: today() }]);
+    await p.shopping([...shopping, { id: uid(), item: v, qty: qty.trim() || null, category: cat, addedBy: currentUser, bought: false, urgent: false, addedAt: today() }]);
     setInput(""); setQty("");
   };
 
@@ -1587,6 +1697,10 @@ function Shopping({ ctx }) {
     await p.shopping(shopping.map((s) => s.id === id ? { ...s, urgent: !s.urgent } : s));
   };
 
+  const setItemCat = async (id, catId) => {
+    await p.shopping(shopping.map((s) => s.id === id ? { ...s, category: catId } : s));
+  };
+
   const remove = async (id) => { await p.shopping(shopping.filter((s) => s.id !== id)); };
 
   const clearBought = async () => {
@@ -1595,39 +1709,109 @@ function Shopping({ ctx }) {
     showToast("Aufgeräumt");
   };
 
+  // Offene Items nach Kategorie gruppieren (in Laden-Reihenfolge)
+  const grouped = useMemo(() => {
+    const map = {};
+    open.forEach((s) => {
+      const cid = s.category || "sonstiges";
+      if (!map[cid]) map[cid] = [];
+      map[cid].push(s);
+    });
+    return Object.entries(map)
+      .map(([cid, items]) => ({ cat: shopCat(cid), items: items.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0)) }))
+      .sort((a, b) => a.cat.order - b.cat.order);
+  }, [open]);
+
+  // Eine offene Zeile rendern (mit Wisch-Geste)
+  const renderOpenRow = (s) => h(SwipeRow, {
+    key: s.id,
+    onSwipeRight: () => toggle(s.id),
+    onSwipeLeft: () => remove(s.id),
+    rightLabel: "✓ Gekauft",
+    leftLabel: "Löschen",
+    rightColor: c.success,
+    leftColor: c.warn,
+    style: { marginBottom: 6 },
+  },
+    h("div", { style: { ...st.row, padding: "10px 12px", borderColor: s.urgent ? c.warn + "40" : c.border, background: s.urgent ? c.warnBg : c.surface, borderRadius: 12 } },
+      h("button", { onClick: () => toggle(s.id), style: st.checkbox, "aria-label": "Gekauft" }),
+      h("div", { style: { flex: 1, marginLeft: 10, minWidth: 0 } },
+        h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14.5, display: "flex", alignItems: "center", gap: 6 } },
+          s.urgent && I.Alert({ size: 12, color: c.warn, strokeWidth: 2 }),
+          h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, s.item),
+          s.qty && h("span", { style: { fontSize: 12, color: c.inkSoft, fontWeight: 400, marginLeft: "auto", flexShrink: 0 } }, s.qty)
+        ),
+        h("div", { style: { fontSize: 11, color: c.inkFaint, marginTop: 1 } }, `von ${s.addedBy}`)
+      ),
+      h("button", { onClick: () => toggleUrgent(s.id), style: st.miniBtn, "aria-label": "Dringend" },
+        I.Alert({ size: 13, color: s.urgent ? c.warn : c.inkFaint, strokeWidth: 2 })
+      ),
+      h("button", { onClick: () => remove(s.id), style: st.miniBtn, "aria-label": "Löschen" },
+        I.X({ size: 13, color: c.inkFaint, strokeWidth: 2 })
+      )
+    )
+  );
+
   return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
-    h(PageTitle, { title: "Einkaufen", subtitle: "Was fehlt zuhause" }),
-    h("div", { style: { display: "flex", gap: 8, marginBottom: 16 } },
+    h(PageTitle, { title: "Einkaufen", subtitle: "Was fehlt zuhause",
+      right: open.length > 0 && h("button", { onClick: () => setGroupByCat(!groupByCat), style: st.iconBtn, "aria-label": "Sortierung" },
+        groupByCat ? I.List({ color: c.inkSoft, size: 17 }) : I.Grid({ color: c.inkSoft, size: 17 })
+      )
+    }),
+    // Eingabe
+    h("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
       h("input", { value: input, onChange: (e) => setInput(e.target.value), onKeyDown: (e) => e.key === "Enter" && add(), style: { ...st.input, flex: 1 }, placeholder: "Artikel…" }),
-      h("input", { value: qty, onChange: (e) => setQty(e.target.value), onKeyDown: (e) => e.key === "Enter" && add(), style: { ...st.input, width: 70, textAlign: "center" }, placeholder: "Menge" }),
+      h("input", { value: qty, onChange: (e) => setQty(e.target.value), onKeyDown: (e) => e.key === "Enter" && add(), style: { ...st.input, width: 64, textAlign: "center" }, placeholder: "Menge" }),
       h("button", { onClick: add, style: { ...st.primaryBtn, padding: "0 16px", width: "auto", margin: 0, minHeight: 44, height: 44 } }, I.Plus({ size: 17, strokeWidth: 2, color: c.surface }))
     ),
+    // Kategorie-Auswahl für neuen Artikel
+    h("button", { onClick: () => setShowCatPicker(!showCatPicker),
+      style: { ...st.row, padding: "8px 12px", marginBottom: 16, width: "100%", justifyContent: "space-between" }
+    },
+      h("span", { style: { fontSize: 13, color: c.inkSoft, display: "flex", alignItems: "center", gap: 8 } },
+        h("span", { style: { fontSize: 15 } }, shopCat(cat).icon),
+        h("span", null, shopCat(cat).name)
+      ),
+      h("span", { style: { fontSize: 11, color: c.inkFaint } }, "ändern")
+    ),
+    showCatPicker && h("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 16, marginTop: -8 } },
+      SHOP_CATEGORIES.map((sc) =>
+        h("button", { key: sc.id, onClick: () => { setCat(sc.id); setShowCatPicker(false); },
+          style: { ...st.chip, ...(cat === sc.id ? st.chipActive : {}), display: "flex", alignItems: "center", gap: 5 }
+        }, h("span", null, sc.icon), h("span", null, sc.name))
+      )
+    ),
+
     open.length === 0 && bought.length === 0 && h(Empty, { text: "Liste ist leer" }),
-    open.length > 0 && h(React.Fragment, null,
-      h("div", { style: { ...st.eyebrow, marginBottom: 10 } }, `Offen · ${open.length}`),
-      h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
-        open.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0)).map((s) =>
-          h("div", { key: s.id, style: { ...st.row, padding: "10px 12px", borderColor: s.urgent ? c.warn + "40" : c.border, background: s.urgent ? c.warnBg : c.surface } },
-            h("button", { onClick: () => toggle(s.id), style: st.checkbox, "aria-label": "Gekauft" }),
-            h("div", { style: { flex: 1, marginLeft: 10, minWidth: 0 } },
-              h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 14.5, display: "flex", alignItems: "center", gap: 6 } },
-                s.urgent && I.Alert({ size: 12, color: c.warn, strokeWidth: 2 }),
-                h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, s.item),
-                s.qty && h("span", { style: { fontSize: 12, color: c.inkSoft, fontWeight: 400, marginLeft: "auto", flexShrink: 0 } }, s.qty)
+
+    // OFFENE Artikel
+    open.length > 0 && (groupByCat
+      ? h("div", null,
+          h("div", { style: { ...st.eyebrow, marginBottom: 10 } }, `Offen · ${open.length}`),
+          grouped.map(({ cat: sc, items }) =>
+            h("div", { key: sc.id, style: { marginBottom: 16 } },
+              h("div", { style: { display: "flex", alignItems: "center", gap: 7, marginBottom: 7, paddingLeft: 2 } },
+                h("span", { style: { fontSize: 15 } }, sc.icon),
+                h("span", { style: { fontSize: 12.5, fontWeight: 600, color: c.inkSoft, letterSpacing: 0.2 } }, sc.name),
+                h("span", { style: { fontSize: 11, color: c.inkFaint } }, `· ${items.length}`)
               ),
-              h("div", { style: { fontSize: 11, color: c.inkFaint, marginTop: 1 } }, `von ${s.addedBy}`)
-            ),
-            h("button", { onClick: () => toggleUrgent(s.id), style: st.miniBtn, "aria-label": "Dringend" },
-              I.Alert({ size: 13, color: s.urgent ? c.warn : c.inkFaint, strokeWidth: 2 })
-            ),
-            h("button", { onClick: () => remove(s.id), style: st.miniBtn, "aria-label": "Löschen" },
-              I.X({ size: 13, color: c.inkFaint, strokeWidth: 2 })
+              items.map(renderOpenRow)
             )
           )
         )
-      )
+      : h("div", null,
+          h("div", { style: { ...st.eyebrow, marginBottom: 10 } }, `Offen · ${open.length}`),
+          open.sort((a, b) => (b.urgent ? 1 : 0) - (a.urgent ? 1 : 0)).map(renderOpenRow)
+        )
     ),
-    bought.length > 0 && h(React.Fragment, null,
+
+    // Wisch-Hinweis (nur wenn offene Items da sind)
+    open.length > 0 && h("div", { style: { fontSize: 11, color: c.inkFaint, textAlign: "center", marginTop: 4, marginBottom: 8, fontStyle: "italic" } },
+      "Tipp: nach rechts wischen = gekauft, nach links = löschen"
+    ),
+
+    // GEKAUFTE Artikel
+    bought.length > 0 && h("div", null,
       h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 24, marginBottom: 8 } },
         h("div", { style: st.eyebrow }, `Gekauft · ${bought.length}`),
         h("button", { onClick: clearBought, style: st.textBtn }, "Aufräumen")
@@ -2573,10 +2757,26 @@ function FolderForm({ editing, onClose, onSave }) {
 // STATS
 // ============================================================
 function Stats({ ctx }) {
-  const { expenses, categories, users, budgets } = ctx;
+  const { expenses, categories, users, budgets, tasks } = ctx;
   const [selectedMonth, setSelectedMonth] = useState(today().slice(0, 7));
 
   const monthExpenses = expenses.filter((e) => e.scope === "shared" && e.date.startsWith(selectedMonth));
+
+  // Aufgaben-Erledigungen pro Person, im gewählten Monat (aus der history)
+  const taskStats = useMemo(() => {
+    const counts = {};
+    users.forEach((u) => { counts[u] = 0; });
+    let totalDone = 0;
+    (tasks || []).forEach((t) => {
+      (t.history || []).forEach((entry) => {
+        if (entry.date && entry.date.startsWith(selectedMonth) && entry.by in counts) {
+          counts[entry.by]++;
+          totalDone++;
+        }
+      });
+    });
+    return { counts, totalDone };
+  }, [tasks, users, selectedMonth]);
 
   const byCategory = useMemo(() => {
     const map = {};
@@ -2710,6 +2910,39 @@ function Stats({ ctx }) {
           )
         )
       )
+    ),
+
+    // Aufgaben-Verteilung
+    taskStats.totalDone > 0 && h("div", { style: { ...st.card, padding: 18, marginTop: 14 } },
+      h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 18, fontWeight: 500, color: c.ink, fontStyle: "italic", marginBottom: 4 } }, "Wer hat angepackt"),
+      h("div", { style: { fontSize: 11.5, color: c.inkSoft, marginBottom: 16 } }, `${taskStats.totalDone} erledigte Aufgaben diesen Monat`),
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 12 } },
+        users.map((u, i) => {
+          const count = taskStats.counts[u] || 0;
+          const pct = taskStats.totalDone > 0 ? Math.round((count / taskStats.totalDone) * 100) : 0;
+          const barColor = i === 0 ? c.accent : c.forest;
+          return h("div", { key: u, style: { display: "flex", flexDirection: "column", gap: 5 } },
+            h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
+              h("span", { style: { fontSize: 13.5, color: c.ink, fontWeight: 500 } }, u),
+              h("span", { style: { fontSize: 13, color: c.inkSoft } },
+                `${count} ${count === 1 ? "Aufgabe" : "Aufgaben"} · ${pct}%`
+              )
+            ),
+            h("div", { style: { ...st.progressTrack, height: 8 } },
+              h("div", { style: { ...st.progressFill, width: `${pct}%`, background: barColor, height: 8 } })
+            )
+          );
+        })
+      ),
+      // Fairness-Hinweis
+      (() => {
+        const vals = users.map((u) => taskStats.counts[u] || 0);
+        const max = Math.max(...vals), min = Math.min(...vals);
+        const balanced = max === 0 || (min / max) >= 0.7;
+        return h("div", { style: { marginTop: 14, padding: "10px 12px", background: balanced ? c.successBg : c.warnBg, borderRadius: 10, fontSize: 12, color: balanced ? c.success : c.warn, lineHeight: 1.5 } },
+          balanced ? "Schön ausgewogen — gut gemacht, ihr zwei! ✿" : "Diesen Monat etwas ungleich verteilt. Vielleicht beim nächsten Mal tauschen?"
+        );
+      })()
     )
   );
 }
