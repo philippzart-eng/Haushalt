@@ -2540,6 +2540,77 @@ function FolderDetail({ folder, notes, currentUser, onBack, onOpenNote, onAddNot
   );
 }
 
+// Vollbild-Bildbetrachter mit Navigation zwischen mehreren Bildern
+function ImageLightbox({ images, startIndex, onClose }) {
+  const [idx, setIdx] = useState(startIndex || 0);
+  const startX = useRef(0);
+  const [dx, setDx] = useState(0);
+
+  const prev = () => setIdx((i) => (i > 0 ? i - 1 : i));
+  const next = () => setIdx((i) => (i < images.length - 1 ? i + 1 : i));
+
+  // Tastatur-Navigation (Desktop)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft") prev();
+      else if (e.key === "ArrowRight") next();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [images.length]);
+
+  const img = images[idx];
+  if (!img) return null;
+
+  return h("div", {
+    style: {
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "rgba(20,18,16,0.94)",
+      display: "flex", flexDirection: "column",
+      animation: "fadeIn 0.18s ease",
+    },
+    onClick: onClose,
+  },
+    // Kopfzeile: Zähler + Schließen
+    h("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 18px", flexShrink: 0 } },
+      h("span", { style: { color: "rgba(255,255,255,0.7)", fontSize: 13, fontWeight: 500 } },
+        images.length > 1 ? `${idx + 1} / ${images.length}` : ""
+      ),
+      h("button", { onClick: onClose,
+        style: { width: 38, height: 38, borderRadius: "50%", background: "rgba(255,255,255,0.12)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }
+      }, I.X({ size: 20, color: "#fff", strokeWidth: 2 }))
+    ),
+    // Bild
+    h("div", {
+      style: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", padding: "0 12px" },
+      onClick: (e) => e.stopPropagation(),
+      onTouchStart: (e) => { startX.current = e.touches[0].clientX; },
+      onTouchMove: (e) => { setDx(e.touches[0].clientX - startX.current); },
+      onTouchEnd: () => {
+        if (dx > 60) prev();
+        else if (dx < -60) next();
+        setDx(0);
+      },
+    },
+      h("img", {
+        src: img.data, alt: img.name || "",
+        style: { maxWidth: "100%", maxHeight: "100%", objectFit: "contain", borderRadius: 8, transform: `translateX(${dx}px)`, transition: dx === 0 ? "transform 0.2s" : "none" }
+      })
+    ),
+    // Navigation unten (nur bei mehreren Bildern)
+    images.length > 1 && h("div", { style: { display: "flex", alignItems: "center", justifyContent: "center", gap: 28, padding: "20px 0 28px", flexShrink: 0 },
+      onClick: (e) => e.stopPropagation() },
+      h("button", { onClick: prev, disabled: idx === 0,
+        style: { width: 48, height: 48, borderRadius: "50%", background: idx === 0 ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.15)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", opacity: idx === 0 ? 0.4 : 1 }
+      }, I.ChevLeft({ size: 22, color: "#fff", strokeWidth: 2 })),
+      h("button", { onClick: next, disabled: idx === images.length - 1,
+        style: { width: 48, height: 48, borderRadius: "50%", background: idx === images.length - 1 ? "rgba(255,255,255,0.06)" : "rgba(255,255,255,0.15)", border: "none", display: "flex", alignItems: "center", justifyContent: "center", opacity: idx === images.length - 1 ? 0.4 : 1, transform: "rotate(180deg)" }
+      }, I.ChevLeft({ size: 22, color: "#fff", strokeWidth: 2 }))
+    )
+  );
+}
+
 function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
   const [title, setTitle] = useState(note.title || "");
   const [content, setContent] = useState(note.content || "");
@@ -2547,6 +2618,7 @@ function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
   const [images, setImages] = useState(note.images || []);
   const [newChecklistItem, setNewChecklistItem] = useState("");
   const [showChecklist, setShowChecklist] = useState((note.checklist || []).length > 0);
+  const [lightboxIdx, setLightboxIdx] = useState(null); // Index des großen Bildes, oder null
   const fileInputRef = useRef(null);
 
   const saveTimerRef = useRef(null);
@@ -2687,16 +2759,23 @@ function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
       ),
 
       images.length > 0 && h("div", { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 } },
-        images.map((img) =>
+        images.map((img, i) =>
           h("div", { key: img.id, style: { position: "relative", aspectRatio: "1", borderRadius: 8, overflow: "hidden", background: c.surfaceAlt } },
-            h("img", { src: img.data, alt: img.name, style: { width: "100%", height: "100%", objectFit: "cover" } }),
-            h("button", { onClick: () => removeImage(img.id),
+            h("img", { src: img.data, alt: img.name,
+              onClick: () => setLightboxIdx(i),
+              style: { width: "100%", height: "100%", objectFit: "cover", cursor: "pointer", display: "block" } }),
+            h("button", { onClick: (e) => { e.stopPropagation(); removeImage(img.id); },
               style: { position: "absolute", top: 4, right: 4, width: 24, height: 24, borderRadius: "50%", background: "rgba(0,0,0,0.55)", border: "none", display: "flex", alignItems: "center", justifyContent: "center" }
             }, I.X({ size: 12, color: "#fff", strokeWidth: 2.5 }))
           )
         )
       )
-    )
+    ),
+
+    // Vollbild-Bildbetrachter
+    lightboxIdx !== null && h(ImageLightbox, {
+      images, startIndex: lightboxIdx, onClose: () => setLightboxIdx(null)
+    })
   );
 }
 
