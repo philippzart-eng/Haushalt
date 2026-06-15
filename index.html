@@ -211,6 +211,7 @@ const I = {
   Grid: (p) => svgIcon("M3 3h7v7H3z M14 3h7v7h-7z M14 14h7v7h-7z M3 14h7v7H3z", p),
   List: (p) => svgIcon("M8 6h13 M8 12h13 M8 18h13 M3 6h.01 M3 12h.01 M3 18h.01", p),
   ChevLeft: (p) => svgIcon("M15 18l-6-6 6-6", p),
+  FileText: (p) => svgIcon("M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8", p),
 };
 
 function svgIcon(d, { size = 16, color = "currentColor", strokeWidth = 1.6 } = {}) {
@@ -2519,7 +2520,7 @@ function FolderDetail({ folder, notes, currentUser, onBack, onOpenNote, onAddNot
       ? h(Empty, { text: "Noch keine Notizen in dieser Mappe" })
       : h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
           notes.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).map((n) => {
-            const preview = n.content ? n.content.slice(0, 80) : n.checklist?.length > 0 ? `${n.checklist.filter((x) => x.done).length}/${n.checklist.length} erledigt` : n.images?.length > 0 ? `${n.images.length} Bild${n.images.length === 1 ? "" : "er"}` : "";
+            const preview = n.content ? n.content.slice(0, 80) : n.checklist?.length > 0 ? `${n.checklist.filter((x) => x.done).length}/${n.checklist.length} erledigt` : n.images?.length > 0 ? `${n.images.length} Bild${n.images.length === 1 ? "" : "er"}` : n.files?.length > 0 ? `${n.files.length} PDF${n.files.length === 1 ? "" : "s"}` : "";
             return h("button", { key: n.id, onClick: () => onOpenNote(n.id),
               style: { ...st.card, padding: 14, textAlign: "left" }
             },
@@ -2530,6 +2531,7 @@ function FolderDetail({ folder, notes, currentUser, onBack, onOpenNote, onAddNot
                 h("span", null, "·"),
                 h("span", null, fmtDate(new Date(n.updatedAt || n.createdAt).toISOString().slice(0, 10), { day: "numeric", month: "short" })),
                 n.images?.length > 0 && h("span", { style: { marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3 } }, I.Image({ size: 11 }), n.images.length),
+                n.files?.length > 0 && h("span", { style: { marginLeft: n.images?.length > 0 ? 0 : "auto", display: "inline-flex", alignItems: "center", gap: 3 } }, I.FileText({ size: 11 }), n.files.length),
                 n.checklist?.length > 0 && h("span", { style: { display: "inline-flex", alignItems: "center", gap: 3 } }, I.Check({ size: 11 }), `${n.checklist.filter((x) => x.done).length}/${n.checklist.length}`)
               )
             );
@@ -2616,10 +2618,12 @@ function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
   const [content, setContent] = useState(note.content || "");
   const [checklist, setChecklist] = useState(note.checklist || []);
   const [images, setImages] = useState(note.images || []);
+  const [files, setFiles] = useState(note.files || []); // PDFs & andere Dateien
   const [newChecklistItem, setNewChecklistItem] = useState("");
   const [showChecklist, setShowChecklist] = useState((note.checklist || []).length > 0);
   const [lightboxIdx, setLightboxIdx] = useState(null); // Index des großen Bildes, oder null
   const fileInputRef = useRef(null);
+  const pdfInputRef = useRef(null);
 
   const saveTimerRef = useRef(null);
   const autoSave = (updates) => {
@@ -2631,6 +2635,7 @@ function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
         content: updates.content ?? content,
         checklist: updates.checklist ?? checklist,
         images: updates.images ?? images,
+        files: updates.files ?? files,
         updatedAt: Date.now(),
       });
     }, 800);
@@ -2662,8 +2667,8 @@ function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
     autoSave({ checklist: next });
   };
 
-  const handleImageUpload = async (files) => {
-    for (const file of files) {
+  const handleImageUpload = async (fileList) => {
+    for (const file of fileList) {
       if (!file.type.startsWith("image/")) continue;
       try {
         const compressed = await compressImage(file, 1200, 0.7);
@@ -2681,6 +2686,58 @@ function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
     const next = images.filter((x) => x.id !== id);
     setImages(next);
     autoSave({ images: next });
+  };
+
+  const MAX_PDF_BYTES = 700 * 1024; // ~700 KB Limit (Firestore-Sicherheit)
+  const handlePdfUpload = async (fileList) => {
+    for (const file of fileList) {
+      const isPdf = file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      if (!isPdf) { alert(`"${file.name}" ist kein PDF.`); continue; }
+      if (file.size > MAX_PDF_BYTES) {
+        alert(`"${file.name}" ist zu groß (${(file.size / 1024 / 1024).toFixed(1)} MB).\n\nMaximal erlaubt sind 0,7 MB. Tipp: PDF vorher z. B. mit einem Online-Tool komprimieren oder als Bild abfotografieren.`);
+        continue;
+      }
+      try {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const next = [...files, { id: uid(), data: dataUrl, name: file.name, size: file.size, addedBy: currentUser }];
+        setFiles(next);
+        autoSave({ files: next });
+      } catch (e) {
+        console.error("PDF upload failed", e);
+        alert("Konnte das PDF nicht laden.");
+      }
+    }
+  };
+
+  const removePdf = (id) => {
+    if (!confirm("PDF löschen?")) return;
+    const next = files.filter((x) => x.id !== id);
+    setFiles(next);
+    autoSave({ files: next });
+  };
+
+  const openPdf = (file) => {
+    // PDF in neuem Tab öffnen — Base64 in Blob umwandeln für bessere Kompatibilität
+    try {
+      const base64 = file.data.split(",")[1];
+      const byteChars = atob(base64);
+      const byteNums = new Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i);
+      const blob = new Blob([new Uint8Array(byteNums)], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank");
+      // URL nach kurzer Zeit freigeben
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch (e) {
+      console.error("PDF open failed", e);
+      // Fallback: direkt die Data-URL öffnen
+      window.open(file.data, "_blank");
+    }
   };
 
   return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
@@ -2769,6 +2826,50 @@ function NoteEditor({ note, folder, currentUser, onClose, onSave, onDelete }) {
             }, I.X({ size: 12, color: "#fff", strokeWidth: 2.5 }))
           )
         )
+      )
+    ),
+
+    // PDFs / Dokumente
+    h("div", { style: { marginTop: 18 } },
+      h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 } },
+        h("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+          I.FileText({ size: 16, color: c.inkSoft }),
+          h("span", { style: { fontSize: 13.5, color: c.ink, fontWeight: 500 } }, `PDFs ${files.length > 0 ? `· ${files.length}` : ""}`)
+        ),
+        h("button", { onClick: () => pdfInputRef.current?.click(), style: st.smallBtn },
+          I.Plus({ size: 11, strokeWidth: 2 }), " Hinzufügen"
+        ),
+        h("input", { ref: pdfInputRef, type: "file", accept: "application/pdf,.pdf", multiple: true,
+          onChange: (e) => { handlePdfUpload(Array.from(e.target.files)); e.target.value = ""; },
+          style: { display: "none" }
+        })
+      ),
+
+      files.length > 0 && h("div", { style: { display: "flex", flexDirection: "column", gap: 6 } },
+        files.map((file) =>
+          h("div", { key: file.id, style: { ...st.row, padding: "12px 14px" } },
+            h("button", { onClick: () => openPdf(file),
+              style: { flex: 1, display: "flex", alignItems: "center", gap: 12, background: "transparent", border: "none", textAlign: "left", padding: 0, minWidth: 0, cursor: "pointer" }
+            },
+              h("div", { style: { width: 38, height: 38, borderRadius: 8, background: c.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+                I.FileText({ size: 18, color: c.accent })
+              ),
+              h("div", { style: { minWidth: 0, flex: 1 } },
+                h("div", { style: { fontSize: 14, fontWeight: 500, color: c.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, file.name),
+                h("div", { style: { fontSize: 11, color: c.inkFaint, marginTop: 1 } },
+                  `${file.size ? (file.size / 1024).toFixed(0) + " KB" : ""}${file.addedBy ? ` · ${file.addedBy}` : ""} · Tippen zum Öffnen`
+                )
+              )
+            ),
+            h("button", { onClick: () => removePdf(file.id), style: st.miniBtn, "aria-label": "PDF löschen" },
+              I.Trash({ size: 14, color: c.inkFaint })
+            )
+          )
+        )
+      ),
+
+      files.length === 0 && h("div", { style: { fontSize: 12, color: c.inkFaint, fontStyle: "italic", paddingLeft: 2 } },
+        "Kleine PDFs bis 0,7 MB (z. B. Rechnungen, Tickets)"
       )
     ),
 
