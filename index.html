@@ -214,8 +214,8 @@ const I = {
   FileText: (p) => svgIcon("M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z M14 2v6h6 M16 13H8 M16 17H8 M10 9H8", p),
 };
 
-function svgIcon(d, { size = 16, color = "currentColor", strokeWidth = 1.6 } = {}) {
-  return h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth, strokeLinecap: "round", strokeLinejoin: "round" },
+function svgIcon(d, { size = 16, color = "currentColor", strokeWidth = 1.6, style } = {}) {
+  return h("svg", { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth, strokeLinecap: "round", strokeLinejoin: "round", style },
     d.split(" M").map((path, i) => h("path", { key: i, d: i === 0 ? path : "M" + path }))
   );
 }
@@ -2391,9 +2391,22 @@ function Notes({ ctx }) {
   const [openNoteId, setOpenNoteId] = useState(null);
   const [showFolderForm, setShowFolderForm] = useState(false);
   const [editingFolder, setEditingFolder] = useState(null);
+  const [showAddChoice, setShowAddChoice] = useState(false); // Auswahl: Mappe oder Notiz
 
   const openFolder = folders.find((f) => f.id === openFolderId);
   const openNote = notes.find((n) => n.id === openNoteId);
+
+  // Neue lose Notiz (ohne Mappe) anlegen
+  const createLooseNote = async () => {
+    const newNote = {
+      id: uid(), folderId: null, title: "", content: "",
+      checklist: [], images: [], files: [],
+      createdBy: currentUser, createdAt: Date.now(), updatedAt: Date.now(),
+    };
+    await p.notes([...notes, newNote]);
+    setShowAddChoice(false);
+    setOpenNoteId(newNote.id);
+  };
 
   if (openNote) {
     return h(NoteEditor, {
@@ -2423,15 +2436,9 @@ function Notes({ ctx }) {
       onOpenNote: (id) => setOpenNoteId(id),
       onAddNote: async () => {
         const newNote = {
-          id: uid(),
-          folderId: openFolder.id,
-          title: "",
-          content: "",
-          checklist: [],
-          images: [],
-          createdBy: currentUser,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
+          id: uid(), folderId: openFolder.id, title: "", content: "",
+          checklist: [], images: [], files: [],
+          createdBy: currentUser, createdAt: Date.now(), updatedAt: Date.now(),
         };
         await p.notes([...notes, newNote]);
         setOpenNoteId(newNote.id);
@@ -2449,37 +2456,101 @@ function Notes({ ctx }) {
     });
   }
 
+  // Lose Notizen (ohne Mappe) — folderId null/undefined
+  const looseNotes = notes
+    .filter((n) => !n.folderId)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const sortedFolders = folders.slice().sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  const isEmpty = folders.length === 0 && looseNotes.length === 0;
+
+  // Vorschautext für lose Notiz
+  const notePreview = (n) => n.content ? n.content.slice(0, 60)
+    : n.checklist?.length > 0 ? `${n.checklist.filter((x) => x.done).length}/${n.checklist.length} erledigt`
+    : n.images?.length > 0 ? `${n.images.length} Bild${n.images.length === 1 ? "" : "er"}`
+    : n.files?.length > 0 ? `${n.files.length} PDF${n.files.length === 1 ? "" : "s"}` : "Leere Notiz";
+
   return h("div", { style: { paddingBottom: 24 }, className: "fadeIn" },
-    h(PageTitle, { title: "Notizen", subtitle: "Mappen für eure Themen" }),
+    h(PageTitle, { title: "Notizen", subtitle: "Mappen & einzelne Notizen" }),
 
-    folders.length === 0
-      ? h(Empty, { text: "Noch keine Mappen — leg deine erste an ✿" })
-      : h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
-          folders.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).map((f) => {
-            const noteCount = notes.filter((n) => n.folderId === f.id).length;
-            return h("button", { key: f.id, onClick: () => setOpenFolderId(f.id),
-              style: {
-                ...st.card,
-                padding: 18,
-                textAlign: "left",
-                background: f.color ? `${f.color}10` : c.surface,
-                borderColor: f.color ? `${f.color}40` : c.border,
-                minHeight: 130,
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
-              }
-            },
-              h("div", { style: { fontSize: 28 } }, f.icon || "📓"),
-              h("div", null,
-                h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 19, fontWeight: 500, color: c.ink, letterSpacing: -0.3, lineHeight: 1.1, marginBottom: 4 } }, f.name),
-                h("div", { style: { fontSize: 11, color: c.inkSoft } }, `${noteCount} ${noteCount === 1 ? "Notiz" : "Notizen"}`)
-              )
-            );
-          })
+    isEmpty && h(Empty, { text: "Noch nichts da — leg deine erste Notiz oder Mappe an ✿" }),
+
+    // MAPPEN
+    sortedFolders.length > 0 && h("div", { style: { marginBottom: looseNotes.length > 0 ? 22 : 0 } },
+      h("div", { style: { ...st.eyebrow, marginBottom: 10 } }, "Mappen"),
+      h("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 } },
+        sortedFolders.map((f) => {
+          const noteCount = notes.filter((n) => n.folderId === f.id).length;
+          return h("button", { key: f.id, onClick: () => setOpenFolderId(f.id),
+            style: {
+              ...st.card, padding: 18, textAlign: "left",
+              background: f.color ? `${f.color}10` : c.surface,
+              borderColor: f.color ? `${f.color}40` : c.border,
+              minHeight: 130, display: "flex", flexDirection: "column", justifyContent: "space-between",
+            }
+          },
+            h("div", { style: { fontSize: 28 } }, f.icon || "📓"),
+            h("div", null,
+              h("div", { style: { fontFamily: "'Cormorant Garamond', serif", fontSize: 19, fontWeight: 500, color: c.ink, letterSpacing: -0.3, lineHeight: 1.1, marginBottom: 4 } }, f.name),
+              h("div", { style: { fontSize: 11, color: c.inkSoft } }, `${noteCount} ${noteCount === 1 ? "Notiz" : "Notizen"}`)
+            )
+          );
+        })
+      )
+    ),
+
+    // LOSE NOTIZEN
+    looseNotes.length > 0 && h("div", null,
+      h("div", { style: { ...st.eyebrow, marginBottom: 10 } }, "Einzelne Notizen"),
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 8 } },
+        looseNotes.map((n) =>
+          h("button", { key: n.id, onClick: () => setOpenNoteId(n.id),
+            style: { ...st.card, padding: 14, textAlign: "left" }
+          },
+            h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 15, marginBottom: 3 } }, n.title || "Ohne Titel"),
+            h("div", { style: { fontSize: 12.5, color: c.inkSoft, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" } }, notePreview(n)),
+            h("div", { style: { fontSize: 11, color: c.inkFaint, marginTop: 6, display: "flex", gap: 8, alignItems: "center" } },
+              h("span", null, n.createdBy),
+              h("span", null, "·"),
+              h("span", null, fmtDate(new Date(n.updatedAt || n.createdAt).toISOString().slice(0, 10), { day: "numeric", month: "short" })),
+              n.images?.length > 0 && h("span", { style: { marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 3 } }, I.Image({ size: 11 }), n.images.length),
+              n.files?.length > 0 && h("span", { style: { marginLeft: n.images?.length > 0 ? 0 : "auto", display: "inline-flex", alignItems: "center", gap: 3 } }, I.FileText({ size: 11 }), n.files.length)
+            )
+          )
+        )
+      )
+    ),
+
+    h(FAB, { onClick: () => setShowAddChoice(true) }),
+
+    // Auswahl-Dialog: Mappe oder einzelne Notiz
+    showAddChoice && h(Modal, { onClose: () => setShowAddChoice(false), title: "Was möchtest du anlegen?" },
+      h("div", { style: { display: "flex", flexDirection: "column", gap: 10 } },
+        h("button", { onClick: createLooseNote,
+          style: { ...st.row, padding: "16px 16px", width: "100%", textAlign: "left", gap: 14 }
+        },
+          h("div", { style: { width: 42, height: 42, borderRadius: 10, background: c.accentSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+            I.NoteBook({ size: 20, color: c.accent })
+          ),
+          h("div", { style: { flex: 1 } },
+            h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 15 } }, "Einzelne Notiz"),
+            h("div", { style: { fontSize: 12, color: c.inkSoft, marginTop: 1 } }, "Schnell etwas festhalten")
+          ),
+          I.ChevLeft({ size: 16, color: c.inkFaint, style: { transform: "rotate(180deg)" } })
         ),
-
-    h(FAB, { onClick: () => { setEditingFolder(null); setShowFolderForm(true); } }),
+        h("button", { onClick: () => { setShowAddChoice(false); setEditingFolder(null); setShowFolderForm(true); },
+          style: { ...st.row, padding: "16px 16px", width: "100%", textAlign: "left", gap: 14 }
+        },
+          h("div", { style: { width: 42, height: 42, borderRadius: 10, background: c.forestSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+            I.Folder({ size: 20, color: c.forest })
+          ),
+          h("div", { style: { flex: 1 } },
+            h("div", { style: { fontWeight: 500, color: c.ink, fontSize: 15 } }, "Mappe"),
+            h("div", { style: { fontSize: 12, color: c.inkSoft, marginTop: 1 } }, "Mehrere Notizen bündeln (z. B. Urlaub)")
+          ),
+          I.ChevLeft({ size: 16, color: c.inkFaint, style: { transform: "rotate(180deg)" } })
+        )
+      )
+    ),
 
     showFolderForm && h(FolderForm, {
       editing: editingFolder,
